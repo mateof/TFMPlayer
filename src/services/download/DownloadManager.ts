@@ -51,18 +51,7 @@ class DownloadManager {
       .first();
 
     if (existing) {
-      // If completed, verify it's actually cached
-      if (existing.status === 'completed') {
-        const isActuallyCached = await cacheService.isTrackCached(track.fileId);
-        if (isActuallyCached) {
-          console.log('Track already completed and cached:', track.fileName);
-          return;
-        }
-        // Not actually cached, need to re-download
-        console.log('Track marked completed but not cached, resetting:', track.fileName);
-      }
-
-      // Reset and update streamUrl for re-download
+      // Reset existing item and update streamUrl for re-download
       await db.downloadQueue.update(existing.id!, {
         status: 'pending',
         progress: 0,
@@ -217,6 +206,19 @@ class DownloadManager {
       // Create blob and save to cache
       const blob = new Blob(chunks, { type: 'audio/mpeg' });
 
+      console.log('Download stats:', {
+        fileName: item.fileName,
+        expectedSize: totalSize,
+        actualSize: blob.size,
+        receivedLength,
+        complete: blob.size >= totalSize * 0.99
+      });
+
+      // Verify download is complete
+      if (totalSize > 0 && blob.size < totalSize * 0.9) {
+        throw new Error(`Incomplete download: got ${blob.size} bytes, expected ${totalSize}`);
+      }
+
       await db.cachedTracks.put({
         id: item.trackId,
         channelId: item.channelId,
@@ -228,12 +230,9 @@ class DownloadManager {
         blob
       });
 
-      // Mark as completed
-      await db.downloadQueue.update(item.id!, {
-        status: 'completed',
-        progress: 100,
-        completedAt: new Date()
-      });
+      // Remove from queue (track is now in cache)
+      await db.downloadQueue.delete(item.id!);
+      console.log('Download completed:', item.fileName, 'Size:', blob.size);
 
       useDownloadStore.getState().removeProgress(item.trackId);
     } catch (error) {

@@ -78,9 +78,26 @@ class AudioPlayerService {
     });
 
     this.audio.addEventListener('error', (e) => {
-      console.error('Audio error:', e);
+      const error = this.audio.error;
+      console.error('Audio error:', {
+        event: e,
+        code: error?.code,
+        message: error?.message,
+        currentTime: this.audio.currentTime,
+        duration: this.audio.duration,
+        src: this.audio.src?.substring(0, 100)
+      });
       store().setState('error');
-      store().setError(this.audio.error?.message || 'Playback error');
+      store().setError(error?.message || 'Playback error');
+    });
+
+    // Handle stalled/suspended playback
+    this.audio.addEventListener('stalled', () => {
+      console.warn('Audio stalled - network issue or slow connection');
+    });
+
+    this.audio.addEventListener('suspend', () => {
+      console.log('Audio suspended - browser paused loading');
     });
 
     this.audio.addEventListener('volumechange', () => {
@@ -179,10 +196,19 @@ class AudioPlayerService {
         throw new Error(`HTTP ${response.status}: ${response.statusText}`);
       }
 
+      const contentLength = response.headers.get('content-length');
+      console.log('Fetching audio, Content-Length:', contentLength);
+
       const blob = await response.blob();
+      console.log('Created blob for playback:', track.fileName, 'Size:', blob.size, 'Expected:', contentLength);
+
+      // Verify we got the full file
+      if (contentLength && blob.size < parseInt(contentLength) * 0.9) {
+        console.warn('Incomplete download! Got', blob.size, 'expected', contentLength);
+      }
+
       const blobUrl = URL.createObjectURL(blob);
       this.currentBlobUrl = blobUrl;
-      console.log('Created blob URL for playback:', track.fileName);
       return blobUrl;
     } catch (e) {
       console.error('Error fetching audio:', e);
@@ -253,9 +279,15 @@ class AudioPlayerService {
   }
 
   seek(position: number): void {
-    if (this.audio.duration && isFinite(position)) {
-      this.audio.currentTime = Math.max(0, Math.min(position, this.audio.duration));
-      this.updatePositionState();
+    try {
+      if (this.audio.duration && isFinite(position) && isFinite(this.audio.duration)) {
+        const newPosition = Math.max(0, Math.min(position, this.audio.duration));
+        console.log('Seeking to:', newPosition, 'of', this.audio.duration);
+        this.audio.currentTime = newPosition;
+        this.updatePositionState();
+      }
+    } catch (error) {
+      console.error('Seek error:', error);
     }
   }
 

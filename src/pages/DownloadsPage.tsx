@@ -26,13 +26,24 @@ export function DownloadsPage() {
   const loadData = useCallback(async () => {
     setLoading(true);
     try {
-      const [queue, failed, cached] = await Promise.all([
-        db.downloadQueue.where('status').anyOf(['pending', 'downloading']).toArray(),
-        db.downloadQueue.where('status').equals('failed').toArray(),
+      const [allQueue, cached] = await Promise.all([
+        db.downloadQueue.toArray(), // Get ALL queue items for debugging
         db.cachedTracks.toArray()
       ]);
 
-      setDownloads(queue);
+      // Separate by status
+      const pending = allQueue.filter(d => d.status === 'pending' || d.status === 'downloading');
+      const failed = allQueue.filter(d => d.status === 'failed');
+
+      console.log('Download queue status:', {
+        total: allQueue.length,
+        pending: pending.length,
+        failed: failed.length,
+        completed: allQueue.filter(d => d.status === 'completed').length,
+        cancelled: allQueue.filter(d => d.status === 'cancelled').length
+      });
+
+      setDownloads(pending);
       setFailedDownloads(failed);
       setCachedTracks(cached);
       setTotalCacheSize(cached.reduce((acc, t) => acc + t.fileSize, 0));
@@ -120,6 +131,17 @@ export function DownloadsPage() {
     loadData();
   };
 
+  const handleClearAllQueue = async () => {
+    if (!confirm('Clear entire download queue? This will remove all pending, failed, and completed items.')) return;
+    await downloadManager.clearQueue();
+    loadData();
+  };
+
+  const handleRestartQueue = async () => {
+    await downloadManager.restartQueue();
+    loadData();
+  };
+
   const queueCount = downloads.length + failedDownloads.length;
   const tabs: { key: Tab; label: string }[] = [
     { key: 'queue', label: `Queue (${queueCount})` },
@@ -176,6 +198,8 @@ export function DownloadsPage() {
             onCancelAll={handleCancelAllDownloads}
             onRetry={handleRetryDownload}
             onClearFailed={handleClearFailed}
+            onClearAllQueue={handleClearAllQueue}
+            onRestartQueue={handleRestartQueue}
           />
         ) : (
           <CachedTracksList
@@ -197,6 +221,8 @@ interface DownloadQueueProps {
   onCancelAll: () => void;
   onRetry: (trackId: string) => void;
   onClearFailed: () => void;
+  onClearAllQueue: () => void;
+  onRestartQueue: () => void;
 }
 
 function DownloadQueue({
@@ -206,27 +232,43 @@ function DownloadQueue({
   onCancel,
   onCancelAll,
   onRetry,
-  onClearFailed
+  onClearFailed,
+  onClearAllQueue,
+  onRestartQueue
 }: DownloadQueueProps) {
   if (downloads.length === 0 && failedDownloads.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center py-12 text-slate-400">
         <Download className="w-12 h-12 mb-4 opacity-50" />
         <p>No active downloads</p>
+        <div className="flex gap-2 mt-4">
+          <Button variant="ghost" size="sm" onClick={onClearAllQueue}>
+            Clear Queue
+          </Button>
+          <Button variant="primary" size="sm" onClick={onRestartQueue}>
+            Restart Queue
+          </Button>
+        </div>
       </div>
     );
   }
 
   return (
     <div>
-      {/* Cancel all button */}
-      {downloads.length > 0 && (
-        <div className="p-4 border-b border-slate-700">
+      {/* Action buttons */}
+      <div className="p-4 border-b border-slate-700 flex gap-2 flex-wrap">
+        {downloads.length > 0 && (
           <Button variant="ghost" size="sm" onClick={onCancelAll}>
             Cancel All ({downloads.length})
           </Button>
-        </div>
-      )}
+        )}
+        <Button variant="ghost" size="sm" onClick={onClearAllQueue}>
+          Clear Queue
+        </Button>
+        <Button variant="primary" size="sm" onClick={onRestartQueue}>
+          Restart Queue
+        </Button>
+      </div>
 
       {/* Active/Pending downloads */}
       <div className="divide-y divide-slate-700">
