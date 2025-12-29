@@ -202,7 +202,7 @@ export function LocalFilesPage() {
       if (reset) {
         setFiles(filteredData);
         setTotalCount(result.totalCount);
-        setHasMore(result.files.length >= PAGE_SIZE);
+        setHasMore(result.hasMore);
         setCurrentPage(page);
       } else {
         // For pagination, deduplicate files by ID before appending
@@ -216,7 +216,8 @@ export function LocalFilesPage() {
           setHasMore(false);
         } else {
           setFiles([...currentFiles, ...newUniqueFiles]);
-          setHasMore(result.files.length >= PAGE_SIZE && newUniqueFiles.length > 0);
+          // Use server's hasMore flag, but also check for duplicates
+          setHasMore(result.hasMore && newUniqueFiles.length > 0);
           setCurrentPage(page);
         }
       }

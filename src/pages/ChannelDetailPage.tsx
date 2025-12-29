@@ -224,7 +224,7 @@ export function ChannelDetailPage() {
     }
 
     try {
-      const { files: data, totalCount: total } = await channelsApi.getFiles(
+      const { files: data, totalCount: total, hasMore: serverHasMore } = await channelsApi.getFiles(
         parseInt(id!),
         currentFolderId,
         {
@@ -243,7 +243,7 @@ export function ChannelDetailPage() {
       if (reset) {
         setFiles(filteredData);
         setTotalCount(total);
-        setHasMore(data.length >= PAGE_SIZE);
+        setHasMore(serverHasMore);
         setCurrentPage(page);
       } else {
         // For pagination, deduplicate files by ID before appending
@@ -257,8 +257,8 @@ export function ChannelDetailPage() {
           setHasMore(false);
         } else {
           setFiles([...currentFiles, ...newUniqueFiles]);
-          // Only continue if we got a full page AND some new files
-          setHasMore(data.length >= PAGE_SIZE && newUniqueFiles.length > 0);
+          // Use server's hasMore flag, but also check for duplicates
+          setHasMore(serverHasMore && newUniqueFiles.length > 0);
           setCurrentPage(page);
         }
       }

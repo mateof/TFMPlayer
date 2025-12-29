@@ -9,11 +9,15 @@ export const localFilesApi = {
     search?: string;
     sortBy?: string;
     sortDesc?: boolean;
-  }): Promise<{ files: ChannelFile[]; totalCount: number; currentPath: string; parentPath: string | null }> {
+  }): Promise<{ files: ChannelFile[]; totalCount: number; currentPath: string; parentPath: string | null; hasMore: boolean }> {
     const client = await apiClient.getClient();
+
+    // Ensure path starts with / for the API (uses capital P for Path parameter)
+    const normalizedPath = path ? (path.startsWith('/') ? path : `/${path}`) : undefined;
+
     const response = await client.get('/api/mobile/files/local', {
       params: {
-        path: path || undefined,
+        Path: normalizedPath, // Capital P as expected by the API
         filter: params?.filter,
         searchText: params?.search,
         page: params?.page,
@@ -44,12 +48,14 @@ export const localFilesApi = {
       files = innerData.items;
     }
 
-    // Extract metadata
-    totalCount = data.totalCount || innerData.totalCount || files.length;
+    // Extract metadata - check for pagination object like in channels API
+    const pagination = data.pagination || innerData.pagination;
+    totalCount = pagination?.totalItems || data.totalCount || innerData.totalCount || files.length;
+    const hasMore = pagination?.hasNext ?? (files.length >= 50);
     currentPath = innerData.currentPath || innerData.path || path;
     parentPath = innerData.parentPath || innerData.parent || null;
 
-    return { files, totalCount, currentPath, parentPath };
+    return { files, totalCount, currentPath, parentPath, hasMore };
   },
 
   async getStreamUrl(filePath: string): Promise<string> {

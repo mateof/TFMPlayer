@@ -33,9 +33,9 @@ export const channelsApi = {
     search?: string;
     sortBy?: string;
     sortDesc?: boolean;
-  }): Promise<{ files: ChannelFile[]; totalCount: number }> {
+  }): Promise<{ files: ChannelFile[]; totalCount: number; hasMore: boolean }> {
     const client = await apiClient.getClient();
-    const { data } = await client.get<ApiResult<ChannelFile[]>>(`/api/mobile/channels/${id}/files`, {
+    const { data } = await client.get<ApiResult<ChannelFile[]> & { pagination?: { totalItems: number; hasNext: boolean } }>(`/api/mobile/channels/${id}/files`, {
       params: {
         folderId: folderId || undefined,
         filter: params?.filter,
@@ -46,7 +46,10 @@ export const channelsApi = {
         sortDesc: params?.sortDesc
       }
     });
-    return { files: data.data, totalCount: data.totalCount || data.data.length };
+    // Extract totalCount from pagination.totalItems if available
+    const totalCount = data.pagination?.totalItems || data.totalCount || data.data.length;
+    const hasMore = data.pagination?.hasNext ?? (data.data.length >= (params?.pageSize || 50));
+    return { files: data.data, totalCount, hasMore };
   },
 
   async browse(id: number, path: string = '/'): Promise<ChannelFile[]> {
