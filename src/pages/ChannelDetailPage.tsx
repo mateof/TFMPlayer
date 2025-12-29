@@ -174,6 +174,40 @@ export function ChannelDetailPage() {
     );
   };
 
+  // Sort files client-side (fallback if server doesn't support sorting)
+  const sortFiles = (files: ChannelFile[]): ChannelFile[] => {
+    const sorted = [...files];
+
+    // Always put folders first
+    sorted.sort((a, b) => {
+      // Folders first
+      if (a.category === 'Folder' && b.category !== 'Folder') return -1;
+      if (a.category !== 'Folder' && b.category === 'Folder') return 1;
+
+      let comparison = 0;
+      switch (sortBy) {
+        case 'name':
+          comparison = a.name.localeCompare(b.name);
+          break;
+        case 'date':
+          comparison = new Date(a.dateCreated || 0).getTime() - new Date(b.dateCreated || 0).getTime();
+          break;
+        case 'size':
+          comparison = (a.size || 0) - (b.size || 0);
+          break;
+        case 'type':
+          comparison = (a.category || '').localeCompare(b.category || '');
+          break;
+        default:
+          comparison = 0;
+      }
+
+      return sortDesc ? -comparison : comparison;
+    });
+
+    return sorted;
+  };
+
   const loadFiles = async (page: number, reset: boolean = false) => {
     if (loadingRef.current) return;
     loadingRef.current = true;
@@ -198,13 +232,15 @@ export function ChannelDetailPage() {
         }
       );
 
-      // Apply client-side extension filtering
+      // Apply client-side extension filtering and sorting
       const filteredData = filterByExtension(data);
+      const sortedData = sortFiles(filteredData);
 
       if (reset) {
-        setFiles(filteredData);
+        setFiles(sortedData);
       } else {
-        setFiles(prev => [...prev, ...filteredData]);
+        // For pagination, append and re-sort
+        setFiles(prev => sortFiles([...prev, ...sortedData]));
       }
 
       // Adjust total count for extension filters (approximate)

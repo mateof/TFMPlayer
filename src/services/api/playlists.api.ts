@@ -1,12 +1,24 @@
-import { apiClient } from './client';
+import { apiClient, buildStreamUrlSync } from './client';
 import type {
   Playlist,
   PlaylistDetail,
   ApiResult,
   CreatePlaylistRequest,
   UpdatePlaylistRequest,
-  AddTrackRequest
+  AddTrackRequest,
+  Track
 } from '@/types/models';
+
+// Ensure track has a valid streamUrl
+function ensureStreamUrl(track: Track): Track {
+  if (!track.streamUrl || !track.streamUrl.startsWith('http')) {
+    return {
+      ...track,
+      streamUrl: buildStreamUrlSync(track.channelId, track.fileId, track.fileName)
+    };
+  }
+  return track;
+}
 
 export const playlistsApi = {
   async getAll(): Promise<Playlist[]> {
@@ -18,7 +30,14 @@ export const playlistsApi = {
   async getById(id: string): Promise<PlaylistDetail> {
     const client = await apiClient.getClient();
     const { data } = await client.get<ApiResult<PlaylistDetail>>(`/api/mobile/playlists/${id}`);
-    return data.data;
+
+    // Ensure all tracks have valid streamUrls
+    const playlist = data.data;
+    if (playlist.tracks) {
+      playlist.tracks = playlist.tracks.map(ensureStreamUrl);
+    }
+
+    return playlist;
   },
 
   async create(request: CreatePlaylistRequest): Promise<Playlist> {
