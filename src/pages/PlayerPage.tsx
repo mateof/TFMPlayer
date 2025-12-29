@@ -11,15 +11,19 @@ import {
   ListMusic,
   Music,
   Volume2,
-  VolumeX
+  VolumeX,
+  Plus
 } from 'lucide-react';
 import { useAudioPlayer } from '@/hooks/useAudioPlayer';
 import { formatDuration } from '@/utils/format';
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
+import { PlaylistPicker } from '@/components/playlists/PlaylistPicker';
 
 export function PlayerPage() {
   const navigate = useNavigate();
   const [showQueue, setShowQueue] = useState(false);
+  const [showPlaylistPicker, setShowPlaylistPicker] = useState(false);
+  const queueListRef = useRef<HTMLDivElement>(null);
 
   const {
     currentTrack,
@@ -69,8 +73,18 @@ export function PlayerPage() {
     setVolume(volume > 0 ? 0 : 1);
   };
 
+  // Scroll to current song when queue is shown
+  useEffect(() => {
+    if (showQueue && queueListRef.current && currentIndex >= 0) {
+      const currentItem = queueListRef.current.querySelector(`[data-index="${currentIndex}"]`);
+      if (currentItem) {
+        currentItem.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+    }
+  }, [showQueue, currentIndex]);
+
   return (
-    <div className="min-h-screen flex flex-col bg-gradient-to-b from-slate-800 to-slate-900 safe-area-top safe-area-bottom">
+    <div className="min-h-screen flex flex-col bg-gradient-to-b from-slate-800 to-slate-900 safe-area-top safe-area-bottom overscroll-none">
       {/* Header */}
       <header className="flex items-center justify-between p-4">
         <button
@@ -85,22 +99,35 @@ export function PlayerPage() {
             {currentTrack.channelName}
           </p>
         </div>
-        <button
-          onClick={() => setShowQueue(!showQueue)}
-          className={`p-2 transition-colors ${showQueue ? 'text-emerald-400' : 'text-slate-400 hover:text-white'}`}
-        >
-          <ListMusic className="w-6 h-6" />
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setShowPlaylistPicker(true)}
+            className="p-2 text-slate-400 hover:text-white transition-colors"
+            title="Add to playlist"
+          >
+            <Plus className="w-6 h-6" />
+          </button>
+          <button
+            onClick={() => setShowQueue(!showQueue)}
+            className={`p-2 transition-colors ${showQueue ? 'text-emerald-400' : 'text-slate-400 hover:text-white'}`}
+          >
+            <ListMusic className="w-6 h-6" />
+          </button>
+        </div>
       </header>
 
       {showQueue ? (
-        // Queue View
-        <div className="flex-1 overflow-y-auto px-4">
+        // Queue View - overscroll-none prevents pull-to-refresh
+        <div
+          ref={queueListRef}
+          className="flex-1 overflow-y-auto px-4 overscroll-none"
+        >
           <h2 className="text-lg font-bold text-white mb-4">Queue ({queue.length})</h2>
           <div className="space-y-2">
             {queue.map((track, index) => (
               <button
                 key={`${track.fileId}-${index}`}
+                data-index={index}
                 onClick={() => playAtIndex(index)}
                 className={`w-full flex items-center gap-3 p-3 rounded-lg transition-colors ${
                   index === currentIndex
@@ -244,6 +271,14 @@ export function PlayerPage() {
             />
           </div>
         </>
+      )}
+
+      {/* Playlist Picker Modal */}
+      {showPlaylistPicker && currentTrack && (
+        <PlaylistPicker
+          track={currentTrack}
+          onClose={() => setShowPlaylistPicker(false)}
+        />
       )}
     </div>
   );

@@ -12,6 +12,7 @@ interface UiState {
   toasts: Toast[];
   isLoading: boolean;
   loadingMessage: string;
+  scrollPositions: Record<string, number>; // Key is the page path
 
   setPlayerExpanded: (expanded: boolean) => void;
   togglePlayerExpanded: () => void;
@@ -20,14 +21,17 @@ interface UiState {
   addToast: (message: string, type: Toast['type']) => void;
   removeToast: (id: string) => void;
   setLoading: (loading: boolean, message?: string) => void;
+  saveScrollPosition: (path: string, position: number) => void;
+  getScrollPosition: (path: string) => number;
 }
 
-export const useUiStore = create<UiState>((set) => ({
+export const useUiStore = create<UiState>((set, get) => ({
   isPlayerExpanded: false,
   isQueueOpen: false,
   toasts: [],
   isLoading: false,
   loadingMessage: '',
+  scrollPositions: {},
 
   setPlayerExpanded: (expanded) => set({ isPlayerExpanded: expanded }),
   togglePlayerExpanded: () => set((s) => ({ isPlayerExpanded: !s.isPlayerExpanded })),
@@ -41,5 +45,9 @@ export const useUiStore = create<UiState>((set) => ({
     }, 3000);
   },
   removeToast: (id) => set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) })),
-  setLoading: (loading, message = '') => set({ isLoading: loading, loadingMessage: message })
+  setLoading: (loading, message = '') => set({ isLoading: loading, loadingMessage: message }),
+  saveScrollPosition: (path, position) => set((s) => ({
+    scrollPositions: { ...s.scrollPositions, [path]: position }
+  })),
+  getScrollPosition: (path) => get().scrollPositions[path] || 0
 }));

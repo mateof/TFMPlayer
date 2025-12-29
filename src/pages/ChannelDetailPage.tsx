@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { useParams, useSearchParams } from 'react-router-dom';
+import { useParams, useSearchParams, useLocation } from 'react-router-dom';
 import { Music, Folder, Play, Plus, ChevronRight, Download, Search, SlidersHorizontal, X, Loader2, Check } from 'lucide-react';
 import { Header } from '@/components/layout/Header';
 import { LoadingScreen } from '@/components/common/Spinner';
@@ -51,7 +51,8 @@ interface FolderBreadcrumb {
 export function ChannelDetailPage() {
   const { id } = useParams<{ id: string }>();
   const [searchParams, setSearchParams] = useSearchParams();
-  const { addToast } = useUiStore();
+  const location = useLocation();
+  const { addToast, getScrollPosition } = useUiStore();
   const { play } = useAudioPlayer();
   const activeDownloads = useDownloadStore((state) => state.activeDownloads);
 
@@ -145,6 +146,19 @@ export function ChannelDetailPage() {
       loadFiles(1, true);
     }
   }, [id, currentFolderId, filterMode, debouncedSearchText, sortBy, sortDesc]);
+
+  // Restore scroll position when returning from player
+  useEffect(() => {
+    if (!loading && files.length > 0) {
+      const savedPosition = getScrollPosition(location.pathname);
+      if (savedPosition > 0) {
+        // Use setTimeout to ensure DOM is ready
+        setTimeout(() => {
+          window.scrollTo(0, savedPosition);
+        }, 100);
+      }
+    }
+  }, [loading, files.length, location.pathname, getScrollPosition]);
 
   const loadChannel = async () => {
     try {

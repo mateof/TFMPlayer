@@ -1,10 +1,13 @@
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
 import { Play, Pause, SkipForward, Music } from 'lucide-react';
 import { useAudioPlayer } from '@/hooks/useAudioPlayer';
 import { formatDuration } from '@/utils/format';
+import { useUiStore } from '@/stores/uiStore';
 
 export function MiniPlayer() {
   const navigate = useNavigate();
+  const location = useLocation();
+  const { saveScrollPosition } = useUiStore();
   const {
     currentTrack,
     position,
@@ -28,9 +31,15 @@ export function MiniPlayer() {
     next();
   };
 
+  const handleOpenPlayer = () => {
+    // Save current scroll position before navigating to player
+    saveScrollPosition(location.pathname, window.scrollY);
+    navigate('/player');
+  };
+
   return (
     <div
-      onClick={() => navigate('/player')}
+      onClick={handleOpenPlayer}
       className="fixed bottom-16 left-0 right-0 bg-slate-800 border-t border-slate-700 cursor-pointer z-40 touch-manipulation"
     >
       {/* Progress bar */}
