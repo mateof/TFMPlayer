@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useParams } from 'react-router-dom';
-import { Play, Shuffle, Download, Music, Trash2, Check } from 'lucide-react';
+import { Play, Shuffle, Download, Music, Trash2, Check, CloudOff, Cloud, WifiOff } from 'lucide-react';
 import { Header } from '@/components/layout/Header';
 import { Button } from '@/components/common/Button';
 import { LoadingScreen } from '@/components/common/Spinner';
@@ -10,6 +10,12 @@ import { useUiStore } from '@/stores/uiStore';
 import { formatDuration, formatFileSize } from '@/utils/format';
 import { downloadManager, useDownloadStore } from '@/services/download/DownloadManager';
 import { cacheService } from '@/services/cache/CacheService';
+import {
+  getOfflinePlaylist,
+  saveOfflinePlaylist,
+  deleteOfflinePlaylist,
+  db
+} from '@/db/database';
 import type { PlaylistDetail, Track } from '@/types/models';
 
 export function PlaylistDetailPage() {
@@ -22,6 +28,9 @@ export function PlaylistDetailPage() {
   const [playlist, setPlaylist] = useState<PlaylistDetail | null>(null);
   const [cachedTrackIds, setCachedTrackIds] = useState<Set<string>>(new Set());
   const [downloading, setDownloading] = useState(false);
+  const [isOffline, setIsOffline] = useState(false);
+  const [isOfflineMode, setIsOfflineMode] = useState(false);
+  const [togglingOffline, setTogglingOffline] = useState(false);
 
   useEffect(() => {
     if (id) {
@@ -31,23 +40,57 @@ export function PlaylistDetailPage() {
 
   const loadPlaylist = async () => {
     setLoading(true);
+
+    // Check if playlist is saved offline
+    const offlineData = await getOfflinePlaylist(id!);
+    setIsOffline(!!offlineData);
+
     try {
+      // Try to load from server
       const data = await playlistsApi.getById(id!);
       setPlaylist(data);
+      setIsOfflineMode(false);
+
+      // Update offline cache if it exists
+      if (offlineData) {
+        await saveOfflinePlaylist(id!, data.name, data.description, data.tracks);
+      }
 
       // Check which tracks are cached
-      const cachedIds = new Set<string>();
-      for (const track of data.tracks) {
-        const isCached = await cacheService.isTrackCached(track.fileId);
-        if (isCached) cachedIds.add(track.fileId);
-      }
-      setCachedTrackIds(cachedIds);
+      await updateCacheStatus(data.tracks);
     } catch (error) {
-      addToast('Failed to load playlist', 'error');
-      console.error(error);
+      console.error('Failed to load from server:', error);
+
+      // Try to load from offline cache
+      if (offlineData) {
+        const tracks = JSON.parse(offlineData.tracksJson) as Track[];
+        setPlaylist({
+          id: offlineData.id,
+          name: offlineData.name,
+          description: offlineData.description,
+          trackCount: offlineData.trackCount,
+          tracks,
+          createdAt: offlineData.savedAt.toISOString(),
+          updatedAt: offlineData.lastSyncedAt?.toISOString() || offlineData.savedAt.toISOString()
+        });
+        setIsOfflineMode(true);
+        await updateCacheStatus(tracks);
+        addToast('Offline mode - showing cached playlist', 'info');
+      } else {
+        addToast('Failed to load playlist', 'error');
+      }
     } finally {
       setLoading(false);
     }
+  };
+
+  const updateCacheStatus = async (tracks: Track[]) => {
+    const cachedIds = new Set<string>();
+    for (const track of tracks) {
+      const isCached = await cacheService.isTrackCached(track.fileId);
+      if (isCached) cachedIds.add(track.fileId);
+    }
+    setCachedTrackIds(cachedIds);
   };
 
   const handlePlayAll = () => {
@@ -57,15 +100,58 @@ export function PlaylistDetailPage() {
 
   const handleShufflePlay = () => {
     if (!playlist?.tracks.length) return;
-    // Shuffle the tracks and play
     const shuffled = [...playlist.tracks].sort(() => Math.random() - 0.5);
     play(shuffled[0], shuffled, 0);
+  };
+
+  const handleToggleOffline = async () => {
+    if (!playlist) return;
+
+    setTogglingOffline(true);
+    try {
+      if (isOffline) {
+        // Remove offline data
+        await deleteOfflinePlaylist(id!);
+
+        // Optionally remove cached tracks (ask user)
+        const shouldRemoveTracks = confirm('Also remove downloaded tracks from cache?');
+        if (shouldRemoveTracks) {
+          for (const track of playlist.tracks) {
+            await db.cachedTracks.delete(track.fileId);
+          }
+          setCachedTrackIds(new Set());
+        }
+
+        setIsOffline(false);
+        addToast('Playlist removed from offline', 'success');
+      } else {
+        // Save for offline
+        await saveOfflinePlaylist(id!, playlist.name, playlist.description, playlist.tracks);
+        setIsOffline(true);
+
+        // Start downloading all tracks
+        const tracksToDownload = playlist.tracks.filter(
+          (track) => !cachedTrackIds.has(track.fileId)
+        );
+
+        if (tracksToDownload.length > 0) {
+          await downloadManager.addMultipleToQueue(tracksToDownload);
+          addToast(`Playlist saved for offline. Downloading ${tracksToDownload.length} tracks...`, 'success');
+        } else {
+          addToast('Playlist saved for offline (all tracks already cached)', 'success');
+        }
+      }
+    } catch (error) {
+      console.error('Error toggling offline:', error);
+      addToast('Failed to update offline status', 'error');
+    } finally {
+      setTogglingOffline(false);
+    }
   };
 
   const handleDownloadAll = async () => {
     if (!playlist?.tracks.length) return;
 
-    // Filter out already cached tracks
     const tracksToDownload = playlist.tracks.filter(
       (track) => !cachedTrackIds.has(track.fileId)
     );
@@ -100,6 +186,12 @@ export function PlaylistDetailPage() {
 
   const handleRemoveTrack = async (track: Track, e: React.MouseEvent) => {
     e.stopPropagation();
+
+    if (isOfflineMode) {
+      addToast('Cannot modify playlist while offline', 'error');
+      return;
+    }
+
     if (!confirm(`Remove "${track.title || track.fileName}" from playlist?`)) return;
 
     try {
@@ -133,28 +225,48 @@ export function PlaylistDetailPage() {
 
   const totalDuration = playlist.tracks.reduce((acc, t) => acc + (t.duration || 0), 0);
   const totalSize = playlist.tracks.reduce((acc, t) => acc + t.fileSize, 0);
+  const cachedCount = cachedTrackIds.size;
+  const allCached = cachedCount === playlist.tracks.length && playlist.tracks.length > 0;
 
   return (
     <div className="flex flex-col min-h-screen">
       <Header title={playlist.name} subtitle={playlist.description} showBack />
 
+      {/* Offline mode indicator */}
+      {isOfflineMode && (
+        <div className="flex items-center gap-2 px-4 py-2 bg-amber-500/20 text-amber-400 text-sm">
+          <WifiOff className="w-4 h-4" />
+          <span>Offline mode</span>
+        </div>
+      )}
+
       {/* Playlist Info & Actions */}
       <div className="p-4 bg-gradient-to-b from-slate-800 to-transparent">
         <div className="flex items-center gap-4 mb-4">
-          <div className="w-24 h-24 bg-gradient-to-br from-emerald-500 to-cyan-500 rounded-xl flex items-center justify-center shadow-lg">
+          <div className="w-24 h-24 bg-gradient-to-br from-emerald-500 to-cyan-500 rounded-xl flex items-center justify-center shadow-lg relative">
             <Music className="w-10 h-10 text-white" />
+            {isOffline && (
+              <div className="absolute -bottom-2 -right-2 w-8 h-8 bg-emerald-500 rounded-full flex items-center justify-center border-2 border-slate-900">
+                <CloudOff className="w-4 h-4 text-white" />
+              </div>
+            )}
           </div>
-          <div>
+          <div className="flex-1">
             <p className="text-white font-bold text-xl">{playlist.name}</p>
             <p className="text-slate-400 text-sm">
               {playlist.trackCount} tracks • {formatDuration(totalDuration)}
             </p>
             <p className="text-slate-500 text-xs">{formatFileSize(totalSize)}</p>
+            {cachedCount > 0 && (
+              <p className="text-emerald-400 text-xs mt-1">
+                {cachedCount}/{playlist.tracks.length} cached
+              </p>
+            )}
           </div>
         </div>
 
         {/* Action Buttons */}
-        <div className="flex gap-3">
+        <div className="flex flex-wrap gap-3">
           <Button
             variant="primary"
             icon={<Play className="w-4 h-4" fill="currentColor" />}
@@ -172,14 +284,30 @@ export function PlaylistDetailPage() {
           >
             Shuffle
           </Button>
+        </div>
+
+        {/* Offline toggle and download buttons */}
+        <div className="flex flex-wrap gap-3 mt-3">
           <Button
-            variant="secondary"
-            icon={<Download className="w-4 h-4" />}
-            onClick={handleDownloadAll}
-            disabled={!playlist.tracks.length || downloading}
+            variant={isOffline ? 'primary' : 'secondary'}
+            icon={isOffline ? <CloudOff className="w-4 h-4" /> : <Cloud className="w-4 h-4" />}
+            onClick={handleToggleOffline}
+            loading={togglingOffline}
+            disabled={isOfflineMode}
+            className="flex-1"
           >
-            {downloading ? 'Adding...' : cachedTrackIds.size === playlist.tracks.length ? 'Cached' : 'Download'}
+            {isOffline ? 'Remove Offline' : 'Save Offline'}
           </Button>
+          {!isOffline && (
+            <Button
+              variant="secondary"
+              icon={<Download className="w-4 h-4" />}
+              onClick={handleDownloadAll}
+              disabled={!playlist.tracks.length || downloading || allCached}
+            >
+              {downloading ? 'Adding...' : allCached ? 'All Cached' : 'Download'}
+            </Button>
+          )}
         </div>
       </div>
 
@@ -195,6 +323,7 @@ export function PlaylistDetailPage() {
           <div className="divide-y divide-slate-700">
             {playlist.tracks.map((track, index) => {
               const isCurrentTrack = currentTrack?.fileId === track.fileId;
+              const isCached = cachedTrackIds.has(track.fileId);
               return (
                 <div
                   key={track.fileId}
@@ -214,8 +343,13 @@ export function PlaylistDetailPage() {
                       index + 1
                     )}
                   </span>
-                  <div className="w-10 h-10 bg-slate-700 rounded-lg flex items-center justify-center flex-shrink-0">
+                  <div className="w-10 h-10 bg-slate-700 rounded-lg flex items-center justify-center flex-shrink-0 relative">
                     <Music className={`w-5 h-5 ${isCurrentTrack ? 'text-emerald-400' : 'text-slate-400'}`} />
+                    {isCached && (
+                      <div className="absolute -bottom-1 -right-1 w-4 h-4 bg-emerald-500 rounded-full flex items-center justify-center">
+                        <Check className="w-2.5 h-2.5 text-white" />
+                      </div>
+                    )}
                   </div>
                   <div className="flex-1 min-w-0">
                     <p className={`text-sm truncate ${isCurrentTrack ? 'text-emerald-400' : 'text-white'}`}>
@@ -227,29 +361,29 @@ export function PlaylistDetailPage() {
                     </p>
                   </div>
                   {/* Download status */}
-                  {cachedTrackIds.has(track.fileId) ? (
-                    <span className="p-2 text-emerald-400" title="Cached">
-                      <Check className="w-4 h-4" />
-                    </span>
-                  ) : activeDownloads.has(track.fileId) ? (
-                    <span className="p-2 text-amber-400 text-xs tabular-nums">
-                      {activeDownloads.get(track.fileId)}%
-                    </span>
-                  ) : (
+                  {!isCached && (
+                    activeDownloads.has(track.fileId) ? (
+                      <span className="p-2 text-amber-400 text-xs tabular-nums">
+                        {activeDownloads.get(track.fileId)}%
+                      </span>
+                    ) : (
+                      <button
+                        onClick={(e) => handleDownloadTrack(track, e)}
+                        className="p-2 text-slate-500 hover:text-emerald-400 transition-colors"
+                        title="Download"
+                      >
+                        <Download className="w-4 h-4" />
+                      </button>
+                    )
+                  )}
+                  {!isOfflineMode && (
                     <button
-                      onClick={(e) => handleDownloadTrack(track, e)}
-                      className="p-2 text-slate-500 hover:text-emerald-400 transition-colors"
-                      title="Download"
+                      onClick={(e) => handleRemoveTrack(track, e)}
+                      className="p-2 text-slate-500 hover:text-red-400 transition-colors"
                     >
-                      <Download className="w-4 h-4" />
+                      <Trash2 className="w-4 h-4" />
                     </button>
                   )}
-                  <button
-                    onClick={(e) => handleRemoveTrack(track, e)}
-                    className="p-2 text-slate-500 hover:text-red-400 transition-colors"
-                  >
-                    <Trash2 className="w-4 h-4" />
-                  </button>
                 </div>
               );
             })}

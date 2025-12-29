@@ -104,3 +104,40 @@ export async function isServerConfigured(): Promise<boolean> {
 export async function clearServerConfig(): Promise<void> {
   await db.serverConfig.clear();
 }
+
+// Offline playlist helpers
+export async function saveOfflinePlaylist(
+  id: string,
+  name: string,
+  description: string | undefined,
+  tracks: unknown[],
+  autoSync: boolean = true
+): Promise<void> {
+  await db.offlinePlaylists.put({
+    id,
+    name,
+    description,
+    trackCount: tracks.length,
+    tracksJson: JSON.stringify(tracks),
+    savedAt: new Date(),
+    autoSync,
+    lastSyncedAt: new Date()
+  });
+}
+
+export async function getOfflinePlaylist(id: string): Promise<OfflinePlaylistEntity | undefined> {
+  return db.offlinePlaylists.get(id);
+}
+
+export async function getAllOfflinePlaylists(): Promise<OfflinePlaylistEntity[]> {
+  return db.offlinePlaylists.toArray();
+}
+
+export async function deleteOfflinePlaylist(id: string): Promise<void> {
+  await db.offlinePlaylists.delete(id);
+}
+
+export async function isPlaylistOffline(id: string): Promise<boolean> {
+  const playlist = await db.offlinePlaylists.get(id);
+  return !!playlist;
+}
