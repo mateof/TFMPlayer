@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { Music, Folder, Play, Plus, ChevronRight, Download, Search, SlidersHorizontal, X, Loader2, Check, HardDrive } from 'lucide-react';
 import { Header } from '@/components/layout/Header';
@@ -6,6 +6,7 @@ import { LoadingScreen } from '@/components/common/Spinner';
 import { PlaylistPicker } from '@/components/playlists/PlaylistPicker';
 import { localFilesApi } from '@/services/api/localFiles.api';
 import { useAudioPlayer } from '@/hooks/useAudioPlayer';
+import { useDebounce } from '@/hooks/useDebounce';
 import { useUiStore } from '@/stores/uiStore';
 import { formatFileSize } from '@/utils/format';
 import { downloadManager, useDownloadStore } from '@/services/download/DownloadManager';
@@ -70,6 +71,9 @@ export function LocalFilesPage() {
   const [showSearch, setShowSearch] = useState(false);
   const [showFilters, setShowFilters] = useState(false);
 
+  // Debounce search text (0.7 seconds)
+  const debouncedSearchText = useDebounce(searchText, 700);
+
   // Refs for infinite scroll
   const listRef = useRef<HTMLDivElement>(null);
   const loadingRef = useRef(false);
@@ -100,57 +104,20 @@ export function LocalFilesPage() {
     );
   };
 
-  // Sort files client-side
-  const sortFilesBy = useCallback((filesToSort: ChannelFile[], sort: SortBy, desc: boolean): ChannelFile[] => {
-    if (!Array.isArray(filesToSort)) return [];
-    const sorted = [...filesToSort];
+  // Files are sorted by the server - no client-side sorting needed
+  // When sortBy/sortDesc changes, we reload from page 1 with new sort params
 
-    sorted.sort((a, b) => {
-      // Folders first
-      if (a.category === 'Folder' && b.category !== 'Folder') return -1;
-      if (a.category !== 'Folder' && b.category === 'Folder') return 1;
-
-      let comparison = 0;
-      switch (sort) {
-        case 'name':
-          comparison = a.name.localeCompare(b.name);
-          break;
-        case 'date':
-          comparison = new Date(a.dateCreated || 0).getTime() - new Date(b.dateCreated || 0).getTime();
-          break;
-        case 'size':
-          comparison = (a.size || 0) - (b.size || 0);
-          break;
-        case 'type':
-          comparison = (a.category || '').localeCompare(b.category || '');
-          break;
-        default:
-          comparison = 0;
-      }
-
-      return desc ? -comparison : comparison;
-    });
-
-    return sorted;
-  }, []);
-
-  // Compute sorted files for display
-  const displayFiles = useMemo(() => {
-    if (!Array.isArray(files)) return [];
-    return sortFilesBy(files, sortBy, sortDesc);
-  }, [files, sortBy, sortDesc, sortFilesBy]);
-
-  // Reset pagination when path or filter changes
+  // Reset pagination when path, filter, search, or sort changes
   useEffect(() => {
     setCurrentPage(1);
     setFiles([]);
     setHasMore(true);
-  }, [pathParam, filterMode, searchText]);
+  }, [pathParam, filterMode, debouncedSearchText, sortBy, sortDesc]);
 
   // Load files when parameters change
   useEffect(() => {
     loadFiles(1, true);
-  }, [pathParam, filterMode, searchText]);
+  }, [pathParam, filterMode, debouncedSearchText, sortBy, sortDesc]);
 
   // Refresh cache status when downloads complete
   useEffect(() => {
@@ -283,7 +250,7 @@ export function LocalFilesPage() {
   };
 
   const playAudioFile = async (file: ChannelFile) => {
-    const audioFiles = displayFiles.filter(f => f.category === 'Audio');
+    const audioFiles = files.filter(f => f.category === 'Audio');
     const tracks = await Promise.all(audioFiles.map(f => fileToTrack(f)));
     const startIndex = audioFiles.findIndex(f => f.id === file.id);
     const track = await fileToTrack(file);
@@ -291,7 +258,7 @@ export function LocalFilesPage() {
   };
 
   const playAllAudio = async () => {
-    const audioFiles = displayFiles.filter(f => f.category === 'Audio');
+    const audioFiles = files.filter(f => f.category === 'Audio');
     if (audioFiles.length === 0) {
       addToast('No audio files to play', 'info');
       return;
@@ -491,7 +458,7 @@ export function LocalFilesPage() {
       <div ref={listRef} className="flex-1 overflow-y-auto">
         {loading ? (
           <LoadingScreen message="Loading files..." />
-        ) : displayFiles.length === 0 ? (
+        ) : files.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-12 text-slate-400">
             <Folder className="w-12 h-12 mb-4 opacity-50" />
             <p>No files found</p>
@@ -500,7 +467,7 @@ export function LocalFilesPage() {
         ) : (
           <>
             <div className="divide-y divide-slate-700">
-              {displayFiles.map((file) => (
+              {files.map((file) => (
                 <div
                   key={`${file.category}-${file.id}`}
                   onClick={() => handleFileClick(file)}
@@ -580,7 +547,7 @@ export function LocalFilesPage() {
 
             {/* Stats */}
             <div className="py-3 text-center text-xs text-slate-500">
-              {displayFiles.length} of {totalCount} files
+              {files.length} of {totalCount} files
             </div>
           </>
         )}
