@@ -10,6 +10,10 @@ import { useSettingsStore } from '@/stores/settingsStore';
 import { useUiStore } from '@/stores/uiStore';
 import { formatFileSize } from '@/utils/format';
 
+// App version with build timestamp
+const APP_VERSION = '1.2.0';
+const BUILD_TIMESTAMP = '__BUILD_TIMESTAMP__'; // Will be replaced by Vite
+
 export function SettingsPage() {
   const navigate = useNavigate();
   const { clearSettings } = useSettingsStore();
@@ -200,7 +204,8 @@ export function SettingsPage() {
             <Info className="w-5 h-5 text-slate-400" />
             <div>
               <p className="text-sm text-white">TFM Audio PWA</p>
-              <p className="text-xs text-slate-400">Version 1.0.0</p>
+              <p className="text-xs text-slate-400">Version {APP_VERSION}</p>
+              <p className="text-xs text-slate-500">Build: {BUILD_TIMESTAMP}</p>
             </div>
           </div>
         </section>

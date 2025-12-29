@@ -92,19 +92,33 @@ class DownloadManager {
 
   // Add multiple tracks to queue
   async addMultipleToQueue(tracks: Track[]): Promise<void> {
+    console.log(`Adding ${tracks.length} tracks to download queue...`);
     for (const track of tracks) {
       await this.addToQueue(track);
     }
+    // Ensure queue processing starts after all items are added
+    console.log('All tracks added, ensuring queue processing...');
+    // Small delay to allow any current processing to finish checking
+    setTimeout(() => {
+      if (!this.isProcessing) {
+        this.processQueue();
+      }
+    }, 100);
   }
 
   // Process the download queue
   async processQueue(): Promise<void> {
-    if (this.isProcessing) return;
+    if (this.isProcessing) {
+      console.log('Download queue already processing');
+      return;
+    }
 
     this.isProcessing = true;
     useDownloadStore.getState().setProcessing(true);
+    console.log('Starting download queue processing...');
 
     try {
+      let processedCount = 0;
       while (true) {
         // Get next pending item
         const item = await db.downloadQueue
@@ -112,14 +126,39 @@ class DownloadManager {
           .equals('pending')
           .first();
 
-        if (!item) break;
+        if (!item) {
+          console.log(`Queue processing complete. Processed ${processedCount} items.`);
+          break;
+        }
 
+        console.log(`Processing download: ${item.fileName}`);
         await this.downloadItem(item);
+        processedCount++;
       }
+    } catch (error) {
+      console.error('Queue processing error:', error);
     } finally {
       this.isProcessing = false;
       useDownloadStore.getState().setProcessing(false);
     }
+  }
+
+  // Force restart queue processing (useful if stuck)
+  async restartQueue(): Promise<void> {
+    console.log('Force restarting download queue...');
+    this.isProcessing = false;
+
+    // Reset any stuck 'downloading' items back to pending
+    const stuckItems = await db.downloadQueue
+      .where('status')
+      .equals('downloading')
+      .toArray();
+
+    for (const item of stuckItems) {
+      await db.downloadQueue.update(item.id!, { status: 'pending', progress: 0 });
+    }
+
+    await this.processQueue();
   }
 
   // Download a single item

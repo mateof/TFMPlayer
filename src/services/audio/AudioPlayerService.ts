@@ -43,11 +43,19 @@ class AudioPlayerService {
     this.audio.addEventListener('play', () => {
       store().setState('playing');
       this.updateMediaSession();
+      // Update MediaSession playback state
+      if (this.mediaSessionEnabled) {
+        navigator.mediaSession.playbackState = 'playing';
+      }
     });
 
     this.audio.addEventListener('pause', () => {
       if (!this.audio.ended) {
         store().setState('paused');
+        // Update MediaSession playback state
+        if (this.mediaSessionEnabled) {
+          navigator.mediaSession.playbackState = 'paused';
+        }
       }
     });
 
@@ -57,6 +65,8 @@ class AudioPlayerService {
 
     this.audio.addEventListener('timeupdate', () => {
       store().setPosition(this.audio.currentTime);
+      // Update MediaSession position state for notification progress bar
+      this.updatePositionState();
     });
 
     this.audio.addEventListener('waiting', () => {
@@ -336,6 +346,10 @@ class AudioPlayerService {
     this.audio.src = '';
     this.revokeBlobUrl();
     usePlayerStore.getState().setState('stopped');
+    // Update MediaSession playback state
+    if (this.mediaSessionEnabled) {
+      navigator.mediaSession.playbackState = 'none';
+    }
   }
 
   // Queue management
