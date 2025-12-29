@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useParams, useSearchParams } from 'react-router-dom';
-import { Music, Video, FileText, Image, Folder, Play, Plus, ChevronRight, Download, Search, SlidersHorizontal, X, Loader2 } from 'lucide-react';
+import { Music, Folder, Play, Plus, ChevronRight, Download, Search, SlidersHorizontal, X, Loader2, Check } from 'lucide-react';
 import { Header } from '@/components/layout/Header';
 import { LoadingScreen } from '@/components/common/Spinner';
 import { PlaylistPicker } from '@/components/playlists/PlaylistPicker';
@@ -15,14 +15,11 @@ import type { ChannelDetail, ChannelFile, Track } from '@/types/models';
 
 const PAGE_SIZE = 50;
 
-type FilterMode = 'all' | 'audio_folders' | 'audio' | 'video' | 'document' | 'photo';
+type FilterMode = 'audio_folders' | 'audio' | 'mp3' | 'flac' | 'wav' | 'ogg' | 'aac' | 'm4a' | 'wma' | 'ape' | 'opus';
 type SortBy = 'name' | 'date' | 'size' | 'type';
 
 const categoryIcons: Record<string, React.ReactNode> = {
   Audio: <Music className="w-5 h-5" />,
-  Video: <Video className="w-5 h-5" />,
-  Document: <FileText className="w-5 h-5" />,
-  Photo: <Image className="w-5 h-5" />,
   Folder: <Folder className="w-5 h-5" />
 };
 
@@ -155,6 +152,28 @@ export function ChannelDetailPage() {
     }
   };
 
+  // Audio extensions for client-side filtering
+  const audioExtensions = ['mp3', 'flac', 'wav', 'ogg', 'opus', 'aac', 'm4a', 'wma', 'ape'];
+  const isExtensionFilter = audioExtensions.includes(filterMode);
+
+  // Get the API filter value (send 'audio' for extension filters)
+  const getApiFilter = (): string | undefined => {
+    if (filterMode === 'audio_folders') return 'audio_folders';
+    if (filterMode === 'audio' || isExtensionFilter) return 'audio';
+    return 'audio_folders'; // Default to audio + folders
+  };
+
+  // Filter files by extension on the client side
+  const filterByExtension = (files: ChannelFile[]): ChannelFile[] => {
+    if (!isExtensionFilter) return files;
+
+    const ext = `.${filterMode.toLowerCase()}`;
+    return files.filter(f =>
+      f.category === 'Folder' ||
+      f.name.toLowerCase().endsWith(ext)
+    );
+  };
+
   const loadFiles = async (page: number, reset: boolean = false) => {
     if (loadingRef.current) return;
     loadingRef.current = true;
@@ -172,23 +191,28 @@ export function ChannelDetailPage() {
         {
           page,
           pageSize: PAGE_SIZE,
-          filter: filterMode === 'all' ? undefined : filterMode,
+          filter: getApiFilter(),
           search: searchText || undefined
         }
       );
 
+      // Apply client-side extension filtering
+      const filteredData = filterByExtension(data);
+
       if (reset) {
-        setFiles(data);
+        setFiles(filteredData);
       } else {
-        setFiles(prev => [...prev, ...data]);
+        setFiles(prev => [...prev, ...filteredData]);
       }
 
-      setTotalCount(total);
+      // Adjust total count for extension filters (approximate)
+      const adjustedTotal = isExtensionFilter ? filteredData.length : total;
+      setTotalCount(adjustedTotal);
       setHasMore(data.length >= PAGE_SIZE);
       setCurrentPage(page);
 
       // Check cache status for audio files
-      const audioFiles = data.filter(f => f.category === 'Audio');
+      const audioFiles = filteredData.filter(f => f.category === 'Audio');
       const newCachedIds = new Set(cachedTrackIds);
       for (const file of audioFiles) {
         const isCached = await cacheService.isTrackCached(file.id);
@@ -290,13 +314,18 @@ export function ChannelDetailPage() {
     addToast('Added to download queue', 'info');
   };
 
-  const filterOptions: { key: FilterMode; label: string }[] = [
-    { key: 'audio_folders', label: 'Audio + Folders' },
-    { key: 'all', label: 'All Files' },
-    { key: 'audio', label: 'Audio Only' },
-    { key: 'video', label: 'Video' },
-    { key: 'document', label: 'Documents' },
-    { key: 'photo', label: 'Photos' }
+  const filterOptions: { key: FilterMode; label: string; group?: string }[] = [
+    { key: 'audio_folders', label: 'Audio + Folders', group: 'general' },
+    { key: 'audio', label: 'All Audio', group: 'general' },
+    { key: 'mp3', label: 'MP3', group: 'format' },
+    { key: 'flac', label: 'FLAC', group: 'format' },
+    { key: 'wav', label: 'WAV', group: 'format' },
+    { key: 'ogg', label: 'OGG', group: 'format' },
+    { key: 'opus', label: 'OPUS', group: 'format' },
+    { key: 'aac', label: 'AAC', group: 'format' },
+    { key: 'm4a', label: 'M4A', group: 'format' },
+    { key: 'wma', label: 'WMA', group: 'format' },
+    { key: 'ape', label: 'APE', group: 'format' }
   ];
 
   const sortOptions: { key: SortBy; label: string }[] = [
@@ -372,11 +401,31 @@ export function ChannelDetailPage() {
       {/* Filters panel */}
       {showFilters && (
         <div className="px-4 py-3 bg-slate-800 border-b border-slate-700 space-y-3">
-          {/* Filter mode */}
+          {/* Filter mode - General */}
           <div>
             <p className="text-xs text-slate-400 mb-2">Filter</p>
             <div className="flex flex-wrap gap-2">
-              {filterOptions.map((opt) => (
+              {filterOptions.filter(opt => opt.group === 'general').map((opt) => (
+                <button
+                  key={opt.key}
+                  onClick={() => setFilterMode(opt.key)}
+                  className={`px-3 py-1 text-sm rounded-full transition-colors ${
+                    filterMode === opt.key
+                      ? 'bg-emerald-500 text-white'
+                      : 'bg-slate-700 text-slate-300'
+                  }`}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Filter mode - Audio Formats */}
+          <div>
+            <p className="text-xs text-slate-400 mb-2">Audio Format</p>
+            <div className="flex flex-wrap gap-2">
+              {filterOptions.filter(opt => opt.group === 'format').map((opt) => (
                 <button
                   key={opt.key}
                   onClick={() => setFilterMode(opt.key)}
@@ -467,18 +516,14 @@ export function ChannelDetailPage() {
                     className={`w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0 relative ${
                       file.category === 'Folder'
                         ? 'bg-yellow-500/20 text-yellow-400'
-                        : file.category === 'Audio'
-                        ? 'bg-emerald-500/20 text-emerald-400'
-                        : file.category === 'Video'
-                        ? 'bg-purple-500/20 text-purple-400'
-                        : 'bg-slate-700 text-slate-400'
+                        : 'bg-emerald-500/20 text-emerald-400'
                     }`}
                   >
-                    {categoryIcons[file.category] || <FileText className="w-5 h-5" />}
+                    {categoryIcons[file.category] || <Music className="w-5 h-5" />}
                     {/* Cache indicator */}
                     {cachedTrackIds.has(file.id) && (
                       <div className="absolute -bottom-1 -right-1 w-4 h-4 bg-emerald-500 rounded-full flex items-center justify-center">
-                        <span className="text-[8px] text-white">✓</span>
+                        <Check className="w-2.5 h-2.5 text-white" />
                       </div>
                     )}
                   </div>

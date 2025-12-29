@@ -301,7 +301,7 @@ export function PlaylistDetailPage() {
           </Button>
         </div>
 
-        {/* Offline toggle and download buttons */}
+        {/* Offline toggle button */}
         <div className="flex flex-wrap gap-3 mt-3">
           <Button
             variant={isOffline ? 'primary' : 'secondary'}
@@ -313,16 +313,6 @@ export function PlaylistDetailPage() {
           >
             {isOffline ? 'Remove Offline' : 'Save Offline'}
           </Button>
-          {!isOffline && (
-            <Button
-              variant="secondary"
-              icon={<Download className="w-4 h-4" />}
-              onClick={handleDownloadAll}
-              disabled={!playlist.tracks.length || downloading || allCached}
-            >
-              {downloading ? 'Adding...' : allCached ? 'All Cached' : 'Download'}
-            </Button>
-          )}
         </div>
       </div>
 

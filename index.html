@@ -15,16 +15,16 @@
     <div id="root"></div>
     <!-- Handle SPA redirects from 404.html -->
     <script>
-      (function(l) {
-        if (l.search[1] === '/') {
-          var decoded = l.search.slice(1).split('&').map(function(s) {
-            return s.replace(/~and~/g, '&')
-          }).join('?');
-          window.history.replaceState(null, null,
-            l.pathname.slice(0, -1) + decoded + l.hash
-          );
+      (function() {
+        var l = window.location;
+        var params = new URLSearchParams(l.search);
+        var redirectPath = params.get('p');
+        if (redirectPath) {
+          // Remove the ?p= parameter and restore the original path
+          var newUrl = l.pathname.replace(/\/$/, '') + decodeURIComponent(redirectPath) + l.hash;
+          window.history.replaceState(null, null, newUrl);
         }
-      }(window.location))
+      })();
     </script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
