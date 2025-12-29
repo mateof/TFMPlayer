@@ -229,8 +229,13 @@ class AudioPlayerService {
       console.warn('Error checking cache:', e);
     }
 
-    // Build stream URL
-    const url = await buildStreamUrl(track.channelId, track.fileId, track.fileName);
+    // Build stream URL - use track.streamUrl for local files, otherwise build from channelId/fileId
+    let url: string;
+    if (track.isLocalFile && track.streamUrl) {
+      url = track.streamUrl;
+    } else {
+      url = await buildStreamUrl(track.channelId, track.fileId, track.fileName);
+    }
     console.log('Fetching audio from server:', track.fileName, 'URL:', url);
 
     // Fetch with authentication headers since Audio element can't send custom headers
