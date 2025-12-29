@@ -97,6 +97,32 @@ export async function buildStreamUrl(channelId: string, fileId: string, fileName
   return url;
 }
 
+// Build stream URL with apiKey for direct audio element playback (enables native streaming)
+export async function buildStreamUrlWithAuth(channelId: string, fileId: string, fileName?: string): Promise<string> {
+  await apiClient.getClient();
+  const baseUrl = apiClient.getBaseUrl();
+  const apiKey = await apiClient.getApiKey();
+
+  const params = new URLSearchParams();
+  if (fileName) params.set('fileName', fileName);
+  params.set('apiKey', apiKey);
+
+  return `${baseUrl}/api/mobile/stream/tfm/${channelId}/${fileId}?${params.toString()}`;
+}
+
+// Build local stream URL with apiKey for direct audio element playback
+export async function buildLocalStreamUrlWithAuth(filePath: string): Promise<string> {
+  await apiClient.getClient();
+  const baseUrl = apiClient.getBaseUrl();
+  const apiKey = await apiClient.getApiKey();
+
+  const params = new URLSearchParams();
+  params.set('path', filePath);
+  params.set('apiKey', apiKey);
+
+  return `${baseUrl}/api/mobile/stream/local?${params.toString()}`;
+}
+
 // Synchronous version that requires baseUrl to be pre-initialized
 export function buildStreamUrlSync(channelId: string, fileId: string, fileName?: string): string {
   const baseUrl = apiClient.getBaseUrl();

@@ -1,6 +1,6 @@
 import { usePlayerStore } from '@/stores/playerStore';
-import { db, getServerConfig } from '@/db/database';
-import { buildStreamUrl } from '@/services/api/client';
+import { db } from '@/db/database';
+import { buildStreamUrlWithAuth, buildLocalStreamUrlWithAuth } from '@/services/api/client';
 import type { Track } from '@/types/models';
 
 class AudioPlayerService {
@@ -19,39 +19,6 @@ class AudioPlayerService {
       URL.revokeObjectURL(this.currentBlobUrl);
       this.currentBlobUrl = null;
     }
-  }
-
-  // Fetch full file in chunks when server returns partial content
-  private async fetchFullFile(url: string, apiKey: string, totalSize: number): Promise<Blob> {
-    const CHUNK_SIZE = 2 * 1024 * 1024; // 2MB chunks (matching server's chunk size)
-    const chunks: BlobPart[] = [];
-    let downloaded = 0;
-
-    while (downloaded < totalSize) {
-      const end = Math.min(downloaded + CHUNK_SIZE - 1, totalSize - 1);
-      const rangeHeader = `bytes=${downloaded}-${end}`;
-
-      console.log(`Fetching chunk: ${rangeHeader} (${Math.round(downloaded / totalSize * 100)}%)`);
-
-      const response = await fetch(url, {
-        headers: {
-          'X-API-Key': apiKey,
-          'Range': rangeHeader
-        }
-      });
-
-      if (!response.ok && response.status !== 206) {
-        throw new Error(`Chunk fetch failed: HTTP ${response.status}`);
-      }
-
-      const chunk = await response.arrayBuffer();
-      chunks.push(chunk);
-      downloaded += chunk.byteLength;
-
-      console.log(`Downloaded ${downloaded} / ${totalSize} bytes (${Math.round(downloaded / totalSize * 100)}%)`);
-    }
-
-    return new Blob(chunks, { type: 'audio/mpeg' });
   }
 
   private setupEventListeners() {
@@ -231,87 +198,30 @@ class AudioPlayerService {
   }
 
   private async getPlaybackUrl(track: Track): Promise<string> {
-    // Check if track is cached in IndexedDB
+    // Check if track is cached in IndexedDB (for offline playback)
     try {
       const cached = await db.cachedTracks.get(track.fileId);
       if (cached?.blob) {
         console.log('Playing from cache:', track.fileName);
-        return URL.createObjectURL(cached.blob);
+        const blobUrl = URL.createObjectURL(cached.blob);
+        this.currentBlobUrl = blobUrl;
+        return blobUrl;
       }
     } catch (e) {
       console.warn('Error checking cache:', e);
     }
 
-    // Build stream URL - use track.streamUrl for local files, otherwise build from channelId/fileId
+    // Build direct stream URL with apiKey for native browser streaming
+    // This allows the browser to handle Range requests natively (instant playback + seeking)
     let url: string;
-    if (track.isLocalFile && track.streamUrl) {
-      url = track.streamUrl;
+    if (track.isLocalFile) {
+      url = await buildLocalStreamUrlWithAuth(track.filePath);
     } else {
-      url = await buildStreamUrl(track.channelId, track.fileId, track.fileName);
+      url = await buildStreamUrlWithAuth(track.channelId, track.fileId, track.fileName);
     }
-    console.log('Fetching audio from server:', track.fileName, 'URL:', url);
 
-    // Fetch with authentication headers since Audio element can't send custom headers
-    try {
-      const config = await getServerConfig();
-      if (!config) {
-        throw new Error('Server not configured');
-      }
-
-      const response = await fetch(url, {
-        headers: {
-          'X-API-Key': config.apiKey,
-          'Range': 'bytes=0-' // Request full file to avoid partial responses
-        }
-      });
-
-      if (!response.ok && response.status !== 206) {
-        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-      }
-
-      // Check if we got a partial response
-      const contentRange = response.headers.get('content-range');
-      const contentLength = response.headers.get('content-length');
-
-      let totalSize = contentLength ? parseInt(contentLength) : 0;
-
-      // If partial response, extract total size from Content-Range header
-      // Format: "bytes 0-2097152/10801665" - we need the total (10801665)
-      if (contentRange) {
-        const match = contentRange.match(/\/(\d+)$/);
-        if (match) {
-          totalSize = parseInt(match[1]);
-          console.log('Partial response detected. Total file size:', totalSize, 'Content-Length:', contentLength);
-        }
-      }
-
-      console.log('Fetching audio, Content-Length:', contentLength, 'Total Size:', totalSize);
-
-      // If this is a partial response and we didn't get the full file, fetch chunks
-      if (contentRange && contentLength && parseInt(contentLength) < totalSize) {
-        console.log('Server returned partial content. Fetching full file in chunks...');
-        const blob = await this.fetchFullFile(url, config.apiKey, totalSize);
-        console.log('Created blob for playback:', track.fileName, 'Size:', blob.size, 'Expected:', totalSize);
-        const blobUrl = URL.createObjectURL(blob);
-        this.currentBlobUrl = blobUrl;
-        return blobUrl;
-      }
-
-      const blob = await response.blob();
-      console.log('Created blob for playback:', track.fileName, 'Size:', blob.size, 'Expected:', totalSize);
-
-      // Verify we got the full file
-      if (totalSize && blob.size < totalSize * 0.9) {
-        console.warn('Incomplete download! Got', blob.size, 'expected', totalSize);
-      }
-
-      const blobUrl = URL.createObjectURL(blob);
-      this.currentBlobUrl = blobUrl;
-      return blobUrl;
-    } catch (e) {
-      console.error('Error fetching audio:', e);
-      throw e;
-    }
+    console.log('Streaming audio:', track.fileName, 'URL:', url.replace(/apiKey=[^&]+/, 'apiKey=***'));
+    return url;
   }
 
   async play(track: Track, queue?: Track[], startIndex?: number): Promise<void> {
@@ -328,12 +238,12 @@ class AudioPlayerService {
     store.setState('loading');
 
     try {
-      // Stop current playback and cleanup old blob URL
+      // Stop current playback and cleanup old blob URL if any
       this.audio.pause();
       this.audio.currentTime = 0;
       this.revokeBlobUrl();
 
-      // Get playback URL (cached or remote)
+      // Get playback URL (cached blob or direct stream URL with apiKey)
       const url = await this.getPlaybackUrl(track);
 
       // Set new source and play
