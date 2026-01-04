@@ -228,21 +228,23 @@ export function ChannelDetailPage() {
         setHasMore(serverHasMore);
         setCurrentPage(page);
       } else {
-        // For pagination, deduplicate files by ID before appending
-        const currentFiles = files;
-        const existingIds = new Set(currentFiles.map(f => f.id));
-        const newUniqueFiles = filteredData.filter(f => !existingIds.has(f.id));
+        // For pagination, use functional update to avoid stale closure issues
+        setFiles(currentFiles => {
+          const existingIds = new Set(currentFiles.map(f => f.id));
+          const newUniqueFiles = filteredData.filter(f => !existingIds.has(f.id));
 
-        // If no new unique files, stop loading more (we've reached the end or server is returning duplicates)
-        if (newUniqueFiles.length === 0) {
-          console.log('No new unique files, stopping pagination');
-          setHasMore(false);
-        } else {
-          setFiles([...currentFiles, ...newUniqueFiles]);
-          // Use server's hasMore flag, but also check for duplicates
-          setHasMore(serverHasMore && newUniqueFiles.length > 0);
-          setCurrentPage(page);
-        }
+          // If no new unique files, stop loading more (we've reached the end or server is returning duplicates)
+          if (newUniqueFiles.length === 0) {
+            console.log('No new unique files, stopping pagination');
+            setHasMore(false);
+            return currentFiles;
+          } else {
+            // Use server's hasMore flag, but also check for duplicates
+            setHasMore(serverHasMore && newUniqueFiles.length > 0);
+            setCurrentPage(page);
+            return [...currentFiles, ...newUniqueFiles];
+          }
+        });
       }
 
       // Check cache status for audio files
