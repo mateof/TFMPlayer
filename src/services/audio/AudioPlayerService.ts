@@ -11,7 +11,7 @@ class AudioPlayerService {
   // Web Audio API for visualizer (lazy initialization)
   private audioContext: AudioContext | null = null;
   private analyserNode: AnalyserNode | null = null;
-  private sourceNode: MediaElementAudioSourceNode | null = null;
+  private streamSourceNode: MediaStreamAudioSourceNode | null = null;
 
   constructor() {
     this.audio = new Audio();
@@ -27,25 +27,33 @@ class AudioPlayerService {
     }
 
     try {
+      // Check if captureStream is supported
+      if (!('captureStream' in this.audio)) {
+        console.warn('captureStream not supported, visualizer unavailable');
+        return null;
+      }
+
       // Create audio context
       this.audioContext = new AudioContext();
 
       // Create analyser with good settings for visualization
       this.analyserNode = this.audioContext.createAnalyser();
-      this.analyserNode.fftSize = 128; // Smaller = less bars but more responsive
-      this.analyserNode.smoothingTimeConstant = 0.7;
-      this.analyserNode.minDecibels = -90;
+      this.analyserNode.fftSize = 256; // More frequency bins for better resolution
+      this.analyserNode.smoothingTimeConstant = 0.6;
+      this.analyserNode.minDecibels = -85;
       this.analyserNode.maxDecibels = -10;
 
-      // Create source from audio element
-      this.sourceNode = this.audioContext.createMediaElementSource(this.audio);
+      // Use captureStream to tap into audio WITHOUT affecting playback
+      // The audio element continues to output directly to speakers
+      const stream = (this.audio as HTMLAudioElement & { captureStream: () => MediaStream }).captureStream();
+      this.streamSourceNode = this.audioContext.createMediaStreamSource(stream);
 
-      // Connect: source -> analyser -> destination
-      // This way audio still plays through speakers
-      this.sourceNode.connect(this.analyserNode);
-      this.analyserNode.connect(this.audioContext.destination);
+      // Connect ONLY to analyser (NOT to destination)
+      // This way we just read frequency data without affecting audio output
+      this.streamSourceNode.connect(this.analyserNode);
+      // DO NOT connect to destination - audio plays directly from element
 
-      console.log('Visualizer initialized successfully');
+      console.log('Visualizer initialized with captureStream (no audio interference)');
       return this.analyserNode;
     } catch (error) {
       console.error('Failed to initialize visualizer:', error);

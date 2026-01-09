@@ -69,35 +69,41 @@ export function AudioEqualizer({ isPlaying }: AudioEqualizerProps) {
 
       analyser.getByteFrequencyData(dataArray);
 
-      // Map frequency data to bars with logarithmic scale for better distribution
       const frequencyBinCount = analyser.frequencyBinCount;
 
-      for (let i = 0; i < BAR_COUNT; i++) {
-        // Use logarithmic scale to better represent human hearing
-        const startPercent = i / BAR_COUNT;
-        const endPercent = (i + 1) / BAR_COUNT;
+      // Skip first few bins (DC offset, very low rumble) and limit upper range
+      // Most music content is between 60Hz and 14kHz
+      const minBin = 2; // Skip DC and very low frequencies
+      const maxBin = Math.floor(frequencyBinCount * 0.85); // Skip very high frequencies (usually empty)
+      const usableBins = maxBin - minBin;
 
-        // Logarithmic mapping - more bins for lower frequencies
-        const startIndex = Math.floor(Math.pow(startPercent, 1.5) * frequencyBinCount);
-        const endIndex = Math.floor(Math.pow(endPercent, 1.5) * frequencyBinCount);
+      for (let i = 0; i < BAR_COUNT; i++) {
+        // Linear distribution across usable frequency range
+        // This ensures all bars get data
+        const startIndex = minBin + Math.floor((i / BAR_COUNT) * usableBins);
+        const endIndex = minBin + Math.floor(((i + 1) / BAR_COUNT) * usableBins);
 
         // Average the values in this range
         let sum = 0;
         let count = 0;
+        let maxVal = 0;
         for (let j = startIndex; j < endIndex && j < frequencyBinCount; j++) {
           sum += dataArray[j];
+          maxVal = Math.max(maxVal, dataArray[j]);
           count++;
         }
 
+        // Use combination of average and max for more responsive visualization
         const average = count > 0 ? sum / count : 0;
+        const combined = (average * 0.6 + maxVal * 0.4);
 
-        // Apply some scaling for visual appeal
-        // Boost lower frequencies slightly, reduce high frequencies
-        let scale = 1;
-        if (i < BAR_COUNT * 0.2) scale = 1.1;
-        else if (i > BAR_COUNT * 0.7) scale = 0.9;
+        // Normalize and apply slight boost for visual appeal
+        const normalized = combined / 255;
 
-        barValues.push((average / 255) * scale);
+        // Apply curve for better visual response (boost quiet, compress loud)
+        const curved = Math.pow(normalized, 0.8) * 1.2;
+
+        barValues.push(Math.min(1, curved));
       }
     } else {
       // Fallback: animated bars when not playing or no real visualizer
