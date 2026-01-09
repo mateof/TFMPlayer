@@ -1,4 +1,5 @@
-import { useEffect, useRef, useCallback } from 'react';
+import { useEffect, useRef, useState, useCallback } from 'react';
+import { audioPlayer } from '@/services/audio/AudioPlayerService';
 
 interface AudioEqualizerProps {
   isPlaying: boolean;
@@ -7,17 +8,36 @@ interface AudioEqualizerProps {
 export function AudioEqualizer({ isPlaying }: AudioEqualizerProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const animationRef = useRef<number>(0);
-  const barsRef = useRef<number[]>([]);
-  const targetBarsRef = useRef<number[]>([]);
+  const analyserRef = useRef<AnalyserNode | null>(null);
+  const dataArrayRef = useRef<Uint8Array<ArrayBuffer> | null>(null);
+  const [isRealVisualizer, setIsRealVisualizer] = useState(false);
+  const [initAttempted, setInitAttempted] = useState(false);
+
+  // Fallback animation state
+  const fallbackBarsRef = useRef<number[]>([]);
+  const fallbackTargetsRef = useRef<number[]>([]);
   const timeRef = useRef<number>(0);
 
-  const BAR_COUNT = 24;
+  const BAR_COUNT = 32;
 
-  // Initialize bars
+  // Initialize visualizer on mount
   useEffect(() => {
-    barsRef.current = Array(BAR_COUNT).fill(0);
-    targetBarsRef.current = Array(BAR_COUNT).fill(0);
-  }, []);
+    if (initAttempted) return;
+    setInitAttempted(true);
+
+    // Initialize fallback bars
+    fallbackBarsRef.current = Array(BAR_COUNT).fill(0);
+    fallbackTargetsRef.current = Array(BAR_COUNT).fill(0);
+
+    // Try to initialize real visualizer
+    const analyser = audioPlayer.initVisualizer();
+    if (analyser) {
+      analyserRef.current = analyser;
+      dataArrayRef.current = new Uint8Array(analyser.frequencyBinCount);
+      setIsRealVisualizer(true);
+      audioPlayer.resumeAudioContext();
+    }
+  }, [initAttempted]);
 
   const draw = useCallback(() => {
     const canvas = canvasRef.current;
@@ -36,75 +56,94 @@ export function AudioEqualizer({ isPlaying }: AudioEqualizerProps) {
     // Clear canvas
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-    // Update time
-    timeRef.current += 0.05;
+    const barWidth = (width / BAR_COUNT) - 2;
+    const barGap = 2;
+    const maxBarHeight = height - 20;
 
-    // Calculate bar dimensions
-    const barWidth = (width / BAR_COUNT) - 3;
-    const barGap = 3;
-    const maxBarHeight = height - 30;
+    let barValues: number[] = [];
 
-    // Update target values when playing
-    if (isPlaying) {
+    if (isRealVisualizer && analyserRef.current && dataArrayRef.current && isPlaying) {
+      // Real audio analysis
+      const analyser = analyserRef.current;
+      const dataArray = dataArrayRef.current;
+
+      analyser.getByteFrequencyData(dataArray);
+
+      // Map frequency data to bars with logarithmic scale for better distribution
+      const frequencyBinCount = analyser.frequencyBinCount;
+
       for (let i = 0; i < BAR_COUNT; i++) {
-        // Create more natural frequency distribution
-        // Lower frequencies (left) should be more prominent but not overwhelming
-        // Mid frequencies should have good presence
-        // High frequencies should be more subtle
+        // Use logarithmic scale to better represent human hearing
+        const startPercent = i / BAR_COUNT;
+        const endPercent = (i + 1) / BAR_COUNT;
 
-        const normalizedIndex = i / BAR_COUNT;
+        // Logarithmic mapping - more bins for lower frequencies
+        const startIndex = Math.floor(Math.pow(startPercent, 1.5) * frequencyBinCount);
+        const endIndex = Math.floor(Math.pow(endPercent, 1.5) * frequencyBinCount);
 
-        // Base amplitude varies by frequency band
-        let baseAmplitude;
-        if (normalizedIndex < 0.15) {
-          // Sub-bass and bass (left bars) - moderate height
-          baseAmplitude = 0.5 + Math.random() * 0.35;
-        } else if (normalizedIndex < 0.4) {
-          // Low-mid frequencies - highest activity
-          baseAmplitude = 0.6 + Math.random() * 0.4;
-        } else if (normalizedIndex < 0.7) {
-          // Mid frequencies - good presence
-          baseAmplitude = 0.4 + Math.random() * 0.45;
-        } else {
-          // High frequencies - more subtle
-          baseAmplitude = 0.2 + Math.random() * 0.4;
+        // Average the values in this range
+        let sum = 0;
+        let count = 0;
+        for (let j = startIndex; j < endIndex && j < frequencyBinCount; j++) {
+          sum += dataArray[j];
+          count++;
         }
 
-        // Add some wave motion for visual interest
-        const wave = Math.sin(timeRef.current * 2 + i * 0.3) * 0.15;
-        const wave2 = Math.sin(timeRef.current * 3.7 + i * 0.5) * 0.1;
+        const average = count > 0 ? sum / count : 0;
 
-        targetBarsRef.current[i] = Math.max(0.05, Math.min(1, baseAmplitude + wave + wave2));
+        // Apply some scaling for visual appeal
+        // Boost lower frequencies slightly, reduce high frequencies
+        let scale = 1;
+        if (i < BAR_COUNT * 0.2) scale = 1.1;
+        else if (i > BAR_COUNT * 0.7) scale = 0.9;
+
+        barValues.push((average / 255) * scale);
       }
     } else {
-      // When paused, bars should go down
-      for (let i = 0; i < BAR_COUNT; i++) {
-        targetBarsRef.current[i] = 0.02;
-      }
-    }
+      // Fallback: animated bars when not playing or no real visualizer
+      timeRef.current += 0.03;
 
-    // Smooth interpolation towards target values
-    const smoothing = isPlaying ? 0.15 : 0.08;
-    for (let i = 0; i < BAR_COUNT; i++) {
-      barsRef.current[i] += (targetBarsRef.current[i] - barsRef.current[i]) * smoothing;
+      for (let i = 0; i < BAR_COUNT; i++) {
+        if (isPlaying) {
+          const normalizedIndex = i / BAR_COUNT;
+          let baseAmplitude;
+
+          if (normalizedIndex < 0.15) {
+            baseAmplitude = 0.4 + Math.random() * 0.3;
+          } else if (normalizedIndex < 0.4) {
+            baseAmplitude = 0.5 + Math.random() * 0.4;
+          } else if (normalizedIndex < 0.7) {
+            baseAmplitude = 0.35 + Math.random() * 0.4;
+          } else {
+            baseAmplitude = 0.2 + Math.random() * 0.35;
+          }
+
+          fallbackTargetsRef.current[i] = baseAmplitude;
+        } else {
+          fallbackTargetsRef.current[i] = 0.02;
+        }
+
+        // Smooth interpolation
+        fallbackBarsRef.current[i] += (fallbackTargetsRef.current[i] - fallbackBarsRef.current[i]) * 0.12;
+        barValues.push(fallbackBarsRef.current[i]);
+      }
     }
 
     // Draw bars
     for (let i = 0; i < BAR_COUNT; i++) {
-      const barHeight = Math.max(4, barsRef.current[i] * maxBarHeight);
+      const value = Math.min(1, barValues[i] || 0);
+      const barHeight = Math.max(3, value * maxBarHeight);
       const x = i * (barWidth + barGap) + barGap;
       const y = height - barHeight - 10;
 
-      // Create gradient for each bar
+      // Create gradient
       const gradient = ctx.createLinearGradient(x, y, x, height - 10);
 
-      // Color intensity based on height
-      const intensity = barsRef.current[i];
-      if (intensity > 0.7) {
+      if (value > 0.65) {
         gradient.addColorStop(0, '#34d399'); // emerald-400
-        gradient.addColorStop(0.5, '#10b981'); // emerald-500
+        gradient.addColorStop(0.6, '#10b981'); // emerald-500
         gradient.addColorStop(1, '#059669'); // emerald-600
-      } else if (intensity > 0.4) {
+      } else if (value > 0.35) {
         gradient.addColorStop(0, '#10b981'); // emerald-500
         gradient.addColorStop(1, '#047857'); // emerald-700
       } else {
@@ -114,32 +153,28 @@ export function AudioEqualizer({ isPlaying }: AudioEqualizerProps) {
 
       ctx.fillStyle = gradient;
       ctx.beginPath();
-      ctx.roundRect(x, y, barWidth, barHeight, [3, 3, 0, 0]);
+      ctx.roundRect(x, y, barWidth, barHeight, [2, 2, 0, 0]);
       ctx.fill();
     }
 
-    // Draw reflection (subtle)
-    ctx.globalAlpha = 0.15;
+    // Subtle reflection
+    ctx.globalAlpha = 0.1;
     for (let i = 0; i < BAR_COUNT; i++) {
-      const barHeight = Math.max(2, barsRef.current[i] * maxBarHeight * 0.3);
+      const value = barValues[i] || 0;
+      const reflectionHeight = Math.max(1, value * maxBarHeight * 0.2);
       const x = i * (barWidth + barGap) + barGap;
       const y = height - 8;
 
-      const gradient = ctx.createLinearGradient(x, y, x, y + barHeight);
-      gradient.addColorStop(0, '#10b981');
-      gradient.addColorStop(1, 'transparent');
-
-      ctx.fillStyle = gradient;
-      ctx.fillRect(x, y, barWidth, barHeight);
+      ctx.fillStyle = '#10b981';
+      ctx.fillRect(x, y, barWidth, reflectionHeight);
     }
     ctx.globalAlpha = 1;
 
     animationRef.current = requestAnimationFrame(draw);
-  }, [isPlaying]);
+  }, [isPlaying, isRealVisualizer]);
 
   useEffect(() => {
     animationRef.current = requestAnimationFrame(draw);
-
     return () => {
       if (animationRef.current) {
         cancelAnimationFrame(animationRef.current);
@@ -147,7 +182,7 @@ export function AudioEqualizer({ isPlaying }: AudioEqualizerProps) {
     };
   }, [draw]);
 
-  // Resize canvas to match container
+  // Resize canvas
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -175,7 +210,9 @@ export function AudioEqualizer({ isPlaying }: AudioEqualizerProps) {
         className="w-full h-full"
         style={{ maxWidth: '100%', maxHeight: '100%' }}
       />
-      <p className="text-xs text-slate-400 mt-2">Audio Visualizer</p>
+      <p className="text-xs text-slate-400 mt-2">
+        {isRealVisualizer ? 'Audio Visualizer' : 'Visualizer'}
+      </p>
     </div>
   );
 }

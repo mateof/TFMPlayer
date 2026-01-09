@@ -8,15 +8,61 @@ class AudioPlayerService {
   private mediaSessionEnabled = 'mediaSession' in navigator;
   private currentBlobUrl: string | null = null;
 
+  // Web Audio API for visualizer (lazy initialization)
+  private audioContext: AudioContext | null = null;
+  private analyserNode: AnalyserNode | null = null;
+  private sourceNode: MediaElementAudioSourceNode | null = null;
+
   constructor() {
     this.audio = new Audio();
     this.audio.preload = 'metadata';
     this.setupEventListeners();
   }
 
-  // Get audio element for external visualizer (read-only access)
-  getAudioElement(): HTMLAudioElement {
-    return this.audio;
+  // Initialize Web Audio API for visualizer (called on user interaction)
+  initVisualizer(): AnalyserNode | null {
+    // Only create once
+    if (this.analyserNode) {
+      return this.analyserNode;
+    }
+
+    try {
+      // Create audio context
+      this.audioContext = new AudioContext();
+
+      // Create analyser with good settings for visualization
+      this.analyserNode = this.audioContext.createAnalyser();
+      this.analyserNode.fftSize = 128; // Smaller = less bars but more responsive
+      this.analyserNode.smoothingTimeConstant = 0.7;
+      this.analyserNode.minDecibels = -90;
+      this.analyserNode.maxDecibels = -10;
+
+      // Create source from audio element
+      this.sourceNode = this.audioContext.createMediaElementSource(this.audio);
+
+      // Connect: source -> analyser -> destination
+      // This way audio still plays through speakers
+      this.sourceNode.connect(this.analyserNode);
+      this.analyserNode.connect(this.audioContext.destination);
+
+      console.log('Visualizer initialized successfully');
+      return this.analyserNode;
+    } catch (error) {
+      console.error('Failed to initialize visualizer:', error);
+      return null;
+    }
+  }
+
+  // Get analyser node (returns null if not initialized)
+  getAnalyserNode(): AnalyserNode | null {
+    return this.analyserNode;
+  }
+
+  // Resume audio context if suspended
+  async resumeAudioContext(): Promise<void> {
+    if (this.audioContext?.state === 'suspended') {
+      await this.audioContext.resume();
+    }
   }
 
   private revokeBlobUrl(): void {
