@@ -70,13 +70,79 @@ export function ChannelDetailPage() {
   const [hasMore, setHasMore] = useState(true);
   const [totalCount, setTotalCount] = useState(0);
 
-  // Filters
-  const [filterMode, setFilterMode] = useState<FilterMode>('audio_folders');
-  const [sortBy, setSortBy] = useState<SortBy>('name');
-  const [sortDesc, setSortDesc] = useState(false);
-  const [searchText, setSearchText] = useState('');
-  const [showSearch, setShowSearch] = useState(false);
+  // Filters - Initialize from URL params
+  const urlFilterMode = searchParams.get('filter') as FilterMode | null;
+  const urlSortBy = searchParams.get('sortBy') as SortBy | null;
+  const urlSortDesc = searchParams.get('sortDesc');
+  const urlSearch = searchParams.get('search');
+
+  const [filterMode, setFilterModeState] = useState<FilterMode>(urlFilterMode || 'audio_folders');
+  const [sortBy, setSortByState] = useState<SortBy>(urlSortBy || 'name');
+  const [sortDesc, setSortDescState] = useState(urlSortDesc === 'true');
+  const [searchText, setSearchTextState] = useState(urlSearch || '');
+  const [showSearch, setShowSearch] = useState(!!urlSearch);
   const [showFilters, setShowFilters] = useState(false);
+
+  // Sync filters to URL
+  const updateUrlFilters = useCallback((updates: {
+    filter?: FilterMode;
+    sortBy?: SortBy;
+    sortDesc?: boolean;
+    search?: string;
+  }) => {
+    const params = new URLSearchParams(searchParams);
+
+    if (updates.filter !== undefined) {
+      if (updates.filter === 'audio_folders') {
+        params.delete('filter');
+      } else {
+        params.set('filter', updates.filter);
+      }
+    }
+    if (updates.sortBy !== undefined) {
+      if (updates.sortBy === 'name') {
+        params.delete('sortBy');
+      } else {
+        params.set('sortBy', updates.sortBy);
+      }
+    }
+    if (updates.sortDesc !== undefined) {
+      if (updates.sortDesc === false) {
+        params.delete('sortDesc');
+      } else {
+        params.set('sortDesc', 'true');
+      }
+    }
+    if (updates.search !== undefined) {
+      if (updates.search === '') {
+        params.delete('search');
+      } else {
+        params.set('search', updates.search);
+      }
+    }
+
+    setSearchParams(params, { replace: true });
+  }, [searchParams, setSearchParams]);
+
+  const setFilterMode = useCallback((mode: FilterMode) => {
+    setFilterModeState(mode);
+    updateUrlFilters({ filter: mode });
+  }, [updateUrlFilters]);
+
+  const setSortBy = useCallback((sort: SortBy) => {
+    setSortByState(sort);
+    updateUrlFilters({ sortBy: sort });
+  }, [updateUrlFilters]);
+
+  const setSortDesc = useCallback((desc: boolean) => {
+    setSortDescState(desc);
+    updateUrlFilters({ sortDesc: desc });
+  }, [updateUrlFilters]);
+
+  const setSearchText = useCallback((text: string) => {
+    setSearchTextState(text);
+    updateUrlFilters({ search: text });
+  }, [updateUrlFilters]);
 
   // Debounce search text (0.7 seconds)
   const debouncedSearchText = useDebounce(searchText, 700);

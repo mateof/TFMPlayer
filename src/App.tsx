@@ -9,7 +9,6 @@ import { ChannelDetailPage } from '@/pages/ChannelDetailPage';
 import { LocalFilesPage } from '@/pages/LocalFilesPage';
 import { PlaylistsPage } from '@/pages/PlaylistsPage';
 import { PlaylistDetailPage } from '@/pages/PlaylistDetailPage';
-import { PlayerPage } from '@/pages/PlayerPage';
 import { DownloadsPage } from '@/pages/DownloadsPage';
 import { SettingsPage } from '@/pages/SettingsPage';
 import { LoadingScreen } from '@/components/common/Spinner';
@@ -83,7 +82,6 @@ function AppContent() {
             <Route path="/downloads" element={<DownloadsPage />} />
             <Route path="/settings" element={<SettingsPage />} />
           </Route>
-          <Route path="/player" element={<PlayerPage />} />
           <Route path="*" element={<Navigate to="/channels" replace />} />
         </>
       ) : (
