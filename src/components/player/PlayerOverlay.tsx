@@ -12,18 +12,23 @@ import {
   Volume2,
   VolumeX,
   Plus,
-  X
+  X,
+  Loader2
 } from 'lucide-react';
 import { useAudioPlayer } from '@/hooks/useAudioPlayer';
-import { formatDuration } from '@/utils/format';
+import { formatDuration, formatFileSize } from '@/utils/format';
 import { useState, useEffect, useRef } from 'react';
 import { PlaylistPicker } from '@/components/playlists/PlaylistPicker';
 import { useUiStore } from '@/stores/uiStore';
+import { audioMetadataService, type AudioMetadata } from '@/services/audio/AudioMetadataService';
 
 export function PlayerOverlay() {
   const setPlayerExpanded = useUiStore((s) => s.setPlayerExpanded);
   const [showQueue, setShowQueue] = useState(false);
   const [showPlaylistPicker, setShowPlaylistPicker] = useState(false);
+  const [isFlipped, setIsFlipped] = useState(false);
+  const [metadata, setMetadata] = useState<AudioMetadata | null>(null);
+  const [loadingMetadata, setLoadingMetadata] = useState(false);
   const queueListRef = useRef<HTMLDivElement>(null);
 
   const {
@@ -87,6 +92,43 @@ export function PlayerOverlay() {
       }
     }
   }, [showQueue, currentIndex]);
+
+  // Load metadata when track changes
+  useEffect(() => {
+    if (!currentTrack) {
+      setMetadata(null);
+      setIsFlipped(false);
+      return;
+    }
+
+    // Reset flip state when track changes
+    setIsFlipped(false);
+    setMetadata(null);
+
+    const loadMetadata = async () => {
+      setLoadingMetadata(true);
+      try {
+        const meta = await audioMetadataService.getMetadata(
+          currentTrack.fileId,
+          currentTrack.streamUrl,
+          currentTrack.fileSize
+        );
+        setMetadata(meta);
+      } catch (error) {
+        console.error('Failed to load metadata:', error);
+      } finally {
+        setLoadingMetadata(false);
+      }
+    };
+
+    // Delay loading slightly to let playback start first
+    const timeout = setTimeout(loadMetadata, 500);
+    return () => clearTimeout(timeout);
+  }, [currentTrack?.fileId]);
+
+  const handleFlip = () => {
+    setIsFlipped(!isFlipped);
+  };
 
   return (
     <div className="fixed inset-0 z-50 flex flex-col bg-gradient-to-b from-slate-800 to-slate-900 safe-area-top safe-area-bottom overscroll-none">
@@ -188,10 +230,123 @@ export function PlayerOverlay() {
       ) : (
         // Player View
         <>
-          {/* Album Art */}
+          {/* Album Art with Flip */}
           <div className="flex-1 flex items-center justify-center p-8">
-            <div className="w-full max-w-[320px] aspect-square bg-slate-700 rounded-2xl shadow-2xl flex items-center justify-center">
-              <Music className="w-24 h-24 text-slate-500" />
+            <div
+              onClick={handleFlip}
+              className="w-full max-w-[320px] aspect-square cursor-pointer"
+              style={{ perspective: '1000px' }}
+            >
+              <div
+                className="relative w-full h-full transition-transform duration-500"
+                style={{
+                  transformStyle: 'preserve-3d',
+                  transform: isFlipped ? 'rotateY(180deg)' : 'rotateY(0deg)'
+                }}
+              >
+                {/* Front - Album Art */}
+                <div
+                  className="absolute inset-0 bg-slate-700 rounded-2xl shadow-2xl flex items-center justify-center"
+                  style={{ backfaceVisibility: 'hidden' }}
+                >
+                  {metadata?.coverArt ? (
+                    <img
+                      src={metadata.coverArt}
+                      alt="Cover"
+                      className="w-full h-full object-cover rounded-2xl"
+                    />
+                  ) : (
+                    <Music className="w-24 h-24 text-slate-500" />
+                  )}
+                  {/* Tap hint */}
+                  <div className="absolute bottom-3 left-0 right-0 text-center">
+                    <span className="text-xs text-slate-400 bg-slate-800/80 px-3 py-1 rounded-full">
+                      Tap for details
+                    </span>
+                  </div>
+                </div>
+
+                {/* Back - Metadata */}
+                <div
+                  className="absolute inset-0 bg-slate-700 rounded-2xl shadow-2xl p-5 overflow-y-auto"
+                  style={{
+                    backfaceVisibility: 'hidden',
+                    transform: 'rotateY(180deg)'
+                  }}
+                >
+                  {loadingMetadata ? (
+                    <div className="flex flex-col items-center justify-center h-full">
+                      <Loader2 className="w-8 h-8 text-emerald-400 animate-spin" />
+                      <p className="text-slate-400 text-sm mt-2">Loading metadata...</p>
+                    </div>
+                  ) : metadata ? (
+                    <div className="space-y-3 text-sm">
+                      <h3 className="text-emerald-400 font-semibold text-base mb-4">Track Info</h3>
+
+                      {/* Tags section */}
+                      {(metadata.title || metadata.artist || metadata.album) && (
+                        <div className="space-y-2 pb-3 border-b border-slate-600">
+                          {metadata.title && (
+                            <MetadataRow label="Title" value={metadata.title} />
+                          )}
+                          {metadata.artist && (
+                            <MetadataRow label="Artist" value={metadata.artist} />
+                          )}
+                          {metadata.album && (
+                            <MetadataRow label="Album" value={metadata.album} />
+                          )}
+                          {metadata.year && (
+                            <MetadataRow label="Year" value={metadata.year.toString()} />
+                          )}
+                          {metadata.genre && metadata.genre.length > 0 && (
+                            <MetadataRow label="Genre" value={metadata.genre.join(', ')} />
+                          )}
+                          {metadata.track?.no && (
+                            <MetadataRow
+                              label="Track"
+                              value={metadata.track.of ? `${metadata.track.no}/${metadata.track.of}` : metadata.track.no.toString()}
+                            />
+                          )}
+                        </div>
+                      )}
+
+                      {/* Technical section */}
+                      <div className="space-y-2 pt-1">
+                        <h4 className="text-slate-400 text-xs uppercase">Technical</h4>
+                        {metadata.format && (
+                          <MetadataRow label="Format" value={metadata.format.toUpperCase()} />
+                        )}
+                        {metadata.codec && (
+                          <MetadataRow label="Codec" value={metadata.codec} />
+                        )}
+                        {metadata.bitrate && (
+                          <MetadataRow label="Bitrate" value={`${metadata.bitrate} kbps`} />
+                        )}
+                        {metadata.sampleRate && (
+                          <MetadataRow label="Sample Rate" value={`${metadata.sampleRate} Hz`} />
+                        )}
+                        {metadata.channels && (
+                          <MetadataRow label="Channels" value={metadata.channels === 2 ? 'Stereo' : metadata.channels === 1 ? 'Mono' : `${metadata.channels}`} />
+                        )}
+                        {metadata.bitsPerSample && (
+                          <MetadataRow label="Bit Depth" value={`${metadata.bitsPerSample} bit`} />
+                        )}
+                        {metadata.duration && (
+                          <MetadataRow label="Duration" value={formatDuration(metadata.duration)} />
+                        )}
+                        {metadata.fileSize && (
+                          <MetadataRow label="Size" value={formatFileSize(metadata.fileSize)} />
+                        )}
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="flex flex-col items-center justify-center h-full text-slate-400">
+                      <Music className="w-12 h-12 mb-2 opacity-50" />
+                      <p className="text-sm">No metadata available</p>
+                    </div>
+                  )}
+                </div>
+              </div>
             </div>
           </div>
 
@@ -305,6 +460,16 @@ export function PlayerOverlay() {
           onClose={() => setShowPlaylistPicker(false)}
         />
       )}
+    </div>
+  );
+}
+
+// Helper component for metadata rows
+function MetadataRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex justify-between gap-2">
+      <span className="text-slate-400 flex-shrink-0">{label}</span>
+      <span className="text-white text-right truncate">{value}</span>
     </div>
   );
 }
