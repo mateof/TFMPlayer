@@ -8,10 +8,52 @@ class AudioPlayerService {
   private mediaSessionEnabled = 'mediaSession' in navigator;
   private currentBlobUrl: string | null = null;
 
+  // Web Audio API for visualizer
+  private audioContext: AudioContext | null = null;
+  private analyserNode: AnalyserNode | null = null;
+  private sourceNode: MediaElementAudioSourceNode | null = null;
+
   constructor() {
     this.audio = new Audio();
     this.audio.preload = 'metadata';
+    this.audio.crossOrigin = 'anonymous'; // Required for Web Audio API with CORS
     this.setupEventListeners();
+  }
+
+  // Initialize Web Audio API (must be called after user interaction)
+  private initAudioContext(): void {
+    if (this.audioContext) return;
+
+    try {
+      this.audioContext = new AudioContext();
+      this.analyserNode = this.audioContext.createAnalyser();
+      this.analyserNode.fftSize = 256;
+      this.analyserNode.smoothingTimeConstant = 0.8;
+
+      // Connect: audio element -> source -> analyser -> destination
+      this.sourceNode = this.audioContext.createMediaElementSource(this.audio);
+      this.sourceNode.connect(this.analyserNode);
+      this.analyserNode.connect(this.audioContext.destination);
+
+      console.log('Audio context initialized for visualizer');
+    } catch (error) {
+      console.error('Failed to initialize audio context:', error);
+    }
+  }
+
+  // Get analyser node for visualizer component
+  getAnalyserNode(): AnalyserNode | null {
+    if (!this.audioContext) {
+      this.initAudioContext();
+    }
+    return this.analyserNode;
+  }
+
+  // Resume audio context if suspended (needed after user interaction)
+  async resumeAudioContext(): Promise<void> {
+    if (this.audioContext?.state === 'suspended') {
+      await this.audioContext.resume();
+    }
   }
 
   private revokeBlobUrl(): void {

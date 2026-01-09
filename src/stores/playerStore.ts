@@ -13,6 +13,7 @@ interface PlayerState {
   shuffle: boolean;
   repeatMode: RepeatMode;
   error: string | null;
+  showEqualizer: boolean;
 
   // Actions
   setCurrentTrack: (track: Track | null) => void;
@@ -26,6 +27,8 @@ interface PlayerState {
   cycleRepeatMode: () => void;
   setRepeatMode: (mode: RepeatMode) => void;
   setError: (error: string | null) => void;
+  setShowEqualizer: (show: boolean) => void;
+  toggleEqualizer: () => void;
   addToQueue: (track: Track) => void;
   addMultipleToQueue: (tracks: Track[]) => void;
   removeFromQueue: (index: number) => void;
@@ -48,6 +51,7 @@ export const usePlayerStore = create<PlayerState>()(
       shuffle: false,
       repeatMode: 'none',
       error: null,
+      showEqualizer: false,
 
       setCurrentTrack: (track) => set({ currentTrack: track }),
       setQueue: (queue) => set({ queue }),
@@ -64,6 +68,8 @@ export const usePlayerStore = create<PlayerState>()(
         })),
       setRepeatMode: (mode) => set({ repeatMode: mode }),
       setError: (error) => set({ error }),
+      setShowEqualizer: (show) => set({ showEqualizer: show }),
+      toggleEqualizer: () => set((s) => ({ showEqualizer: !s.showEqualizer })),
       addToQueue: (track) => set((s) => ({ queue: [...s.queue, track] })),
       addMultipleToQueue: (tracks) => set((s) => ({ queue: [...s.queue, ...tracks] })),
       removeFromQueue: (index) =>
@@ -108,7 +114,8 @@ export const usePlayerStore = create<PlayerState>()(
       partialize: (state) => ({
         volume: state.volume,
         shuffle: state.shuffle,
-        repeatMode: state.repeatMode
+        repeatMode: state.repeatMode,
+        showEqualizer: state.showEqualizer
       })
     }
   )

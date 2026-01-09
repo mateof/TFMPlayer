@@ -13,17 +13,22 @@ import {
   VolumeX,
   Plus,
   X,
-  Loader2
+  Loader2,
+  Activity
 } from 'lucide-react';
 import { useAudioPlayer } from '@/hooks/useAudioPlayer';
 import { formatDuration, formatFileSize } from '@/utils/format';
 import { useState, useEffect, useRef } from 'react';
 import { PlaylistPicker } from '@/components/playlists/PlaylistPicker';
 import { useUiStore } from '@/stores/uiStore';
+import { usePlayerStore } from '@/stores/playerStore';
 import { audioMetadataService, type AudioMetadata } from '@/services/audio/AudioMetadataService';
+import { AudioEqualizer } from './AudioEqualizer';
 
 export function PlayerOverlay() {
   const setPlayerExpanded = useUiStore((s) => s.setPlayerExpanded);
+  const showEqualizer = usePlayerStore((s) => s.showEqualizer);
+  const toggleEqualizer = usePlayerStore((s) => s.toggleEqualizer);
   const [showQueue, setShowQueue] = useState(false);
   const [showPlaylistPicker, setShowPlaylistPicker] = useState(false);
   const [isFlipped, setIsFlipped] = useState(false);
@@ -93,16 +98,21 @@ export function PlayerOverlay() {
     }
   }, [showQueue, currentIndex]);
 
+  // Set initial flip state based on showEqualizer preference
+  useEffect(() => {
+    if (showEqualizer) {
+      setIsFlipped(true);
+    }
+  }, []);
+
   // Load metadata when track changes
   useEffect(() => {
     if (!currentTrack) {
       setMetadata(null);
-      setIsFlipped(false);
       return;
     }
 
-    // Reset flip state when track changes
-    setIsFlipped(false);
+    // Reset metadata (but keep flip state if equalizer is on)
     setMetadata(null);
 
     const loadMetadata = async () => {
@@ -165,19 +175,26 @@ export function PlayerOverlay() {
                 {currentTrack.channelName}
               </p>
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1">
+              <button
+                onClick={toggleEqualizer}
+                className={`p-2 transition-colors ${showEqualizer ? 'text-emerald-400' : 'text-slate-400 hover:text-white'}`}
+                title="Toggle equalizer"
+              >
+                <Activity className="w-5 h-5" />
+              </button>
               <button
                 onClick={() => setShowPlaylistPicker(true)}
                 className="p-2 text-slate-400 hover:text-white transition-colors"
                 title="Add to playlist"
               >
-                <Plus className="w-6 h-6" />
+                <Plus className="w-5 h-5" />
               </button>
               <button
                 onClick={() => setShowQueue(true)}
                 className="p-2 text-slate-400 hover:text-white transition-colors"
               >
-                <ListMusic className="w-6 h-6" />
+                <ListMusic className="w-5 h-5" />
               </button>
             </div>
           </>
@@ -261,26 +278,29 @@ export function PlayerOverlay() {
                   {/* Tap hint */}
                   <div className="absolute bottom-3 left-0 right-0 text-center">
                     <span className="text-xs text-slate-400 bg-slate-800/80 px-3 py-1 rounded-full">
-                      Tap for details
+                      {showEqualizer ? 'Tap for visualizer' : 'Tap for details'}
                     </span>
                   </div>
                 </div>
 
-                {/* Back - Metadata */}
+                {/* Back - Equalizer or Metadata */}
                 <div
-                  className="absolute inset-0 bg-slate-700 rounded-2xl shadow-2xl p-5 overflow-y-auto"
+                  className="absolute inset-0 bg-slate-700 rounded-2xl shadow-2xl overflow-hidden"
                   style={{
                     backfaceVisibility: 'hidden',
                     transform: 'rotateY(180deg)'
                   }}
                 >
-                  {loadingMetadata ? (
-                    <div className="flex flex-col items-center justify-center h-full">
+                  {showEqualizer ? (
+                    // Equalizer view
+                    <AudioEqualizer isPlaying={isPlaying} />
+                  ) : loadingMetadata ? (
+                    <div className="flex flex-col items-center justify-center h-full p-5">
                       <Loader2 className="w-8 h-8 text-emerald-400 animate-spin" />
                       <p className="text-slate-400 text-sm mt-2">Loading metadata...</p>
                     </div>
                   ) : metadata ? (
-                    <div className="space-y-3 text-sm">
+                    <div className="space-y-3 text-sm p-5 overflow-y-auto h-full">
                       <h3 className="text-emerald-400 font-semibold text-base mb-4">Track Info</h3>
 
                       {/* Tags section */}
@@ -340,7 +360,7 @@ export function PlayerOverlay() {
                       </div>
                     </div>
                   ) : (
-                    <div className="flex flex-col items-center justify-center h-full text-slate-400">
+                    <div className="flex flex-col items-center justify-center h-full text-slate-400 p-5">
                       <Music className="w-12 h-12 mb-2 opacity-50" />
                       <p className="text-sm">No metadata available</p>
                     </div>
