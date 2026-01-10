@@ -41,8 +41,8 @@ class AudioPlayerService {
 
       // Create analyser with good settings for visualization
       this.analyserNode = this.audioContext.createAnalyser();
-      this.analyserNode.fftSize = 4096; // High resolution for accurate frequency bands (~10Hz per bin)
-      this.analyserNode.smoothingTimeConstant = 0.75;
+      this.analyserNode.fftSize = 8192; // Very high resolution for accurate low frequency bands (~5.4Hz per bin)
+      this.analyserNode.smoothingTimeConstant = 0.7;
       this.analyserNode.minDecibels = -90;
       this.analyserNode.maxDecibels = -10;
 

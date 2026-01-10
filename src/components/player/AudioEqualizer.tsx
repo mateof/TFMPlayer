@@ -79,7 +79,7 @@ export function AudioEqualizer({ isPlaying }: AudioEqualizerProps) {
       const frequencyBinCount = analyser.frequencyBinCount;
       // Get actual sample rate from AudioContext, fallback to 44100
       const sampleRate = analyser.context?.sampleRate || 44100;
-      const binWidth = sampleRate / (analyser.fftSize || 4096);
+      const binWidth = sampleRate / (analyser.fftSize || 8192);
 
       // Each bar represents a specific ISO frequency
       for (let i = 0; i < BAR_COUNT; i++) {
@@ -92,16 +92,23 @@ export function AudioEqualizer({ isPlaying }: AudioEqualizerProps) {
         let value = 0;
         let count = 0;
 
-        // Calculate bandwidth for this frequency (Q factor ~4.3 for 1/3 octave)
-        // Lower frequencies need narrower sampling, higher can be wider
-        const bandwidth = centerFreq / 4.3;
-        const binsToSample = Math.max(1, Math.round(bandwidth / binWidth));
-        const range = Math.min(binsToSample, 10); // Cap at 10 bins
+        // For low frequencies, use fewer adjacent bins to avoid overlap
+        // For high frequencies, use more for smoothing
+        let range: number;
+        if (centerFreq < 100) {
+          range = 0; // Only center bin for sub-bass (20-80Hz)
+        } else if (centerFreq < 500) {
+          range = 1; // 1 adjacent bin for bass (100-400Hz)
+        } else if (centerFreq < 2000) {
+          range = 2; // 2 adjacent bins for mids
+        } else {
+          range = 3; // 3 adjacent bins for highs
+        }
 
         for (let j = Math.max(0, binIndex - range); j <= Math.min(frequencyBinCount - 1, binIndex + range); j++) {
           // Weight center bin more heavily
           const distance = Math.abs(j - binIndex);
-          const weight = Math.max(0.5, 1 - distance / (range + 1));
+          const weight = distance === 0 ? 1.0 : 0.5;
           value += dataArray[j] * weight;
           count += weight;
         }
