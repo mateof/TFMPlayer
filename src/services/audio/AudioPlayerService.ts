@@ -11,31 +11,30 @@ class AudioPlayerService {
   // Web Audio API for visualizer (lazy initialization)
   private audioContext: AudioContext | null = null;
   private analyserNode: AnalyserNode | null = null;
-  private streamSourceNode: MediaStreamAudioSourceNode | null = null;
+  private sourceNode: MediaElementAudioSourceNode | null = null;
   private visualizerInitialized = false;
+
+  // Cover art for MediaSession
+  private currentCoverArt: string | null = null;
 
   constructor() {
     this.audio = new Audio();
     this.audio.preload = 'metadata';
+    // Enable CORS for cross-origin audio (needed for visualizer)
+    this.audio.crossOrigin = 'anonymous';
     this.setupEventListeners();
   }
 
   // Initialize Web Audio API for visualizer (called on user interaction)
   initVisualizer(): AnalyserNode | null {
-    // Only create audio context and analyser once
+    // Only create once - MediaElementSource can only be created once per audio element
     if (this.analyserNode && this.visualizerInitialized) {
-      // Reconnect stream if needed (for track changes)
-      this.reconnectVisualizerStream();
+      // Just resume context if needed
+      this.resumeAudioContext();
       return this.analyserNode;
     }
 
     try {
-      // Check if captureStream is supported
-      if (!('captureStream' in this.audio)) {
-        console.warn('captureStream not supported, visualizer unavailable');
-        return null;
-      }
-
       // Create audio context
       this.audioContext = new AudioContext();
 
@@ -46,11 +45,17 @@ class AudioPlayerService {
       this.analyserNode.minDecibels = -90;
       this.analyserNode.maxDecibels = -10;
 
-      // Connect the stream
-      this.reconnectVisualizerStream();
+      // Create source from audio element (can only be done once)
+      this.sourceNode = this.audioContext.createMediaElementSource(this.audio);
+
+      // Connect: source -> analyser -> destination
+      // Audio passes through analyser unchanged
+      this.sourceNode.connect(this.analyserNode);
+      this.analyserNode.connect(this.audioContext.destination);
+
       this.visualizerInitialized = true;
 
-      console.log('Visualizer initialized with captureStream (no audio interference)');
+      console.log('Visualizer initialized with MediaElementSource');
       return this.analyserNode;
     } catch (error) {
       console.error('Failed to initialize visualizer:', error);
@@ -58,41 +63,11 @@ class AudioPlayerService {
     }
   }
 
-  // Reconnect the stream source (needed when track changes)
-  private reconnectVisualizerStream(): void {
-    if (!this.audioContext || !this.analyserNode) return;
-
-    try {
-      // Disconnect old source if exists
-      if (this.streamSourceNode) {
-        try {
-          this.streamSourceNode.disconnect();
-        } catch {
-          // Ignore disconnect errors
-        }
-      }
-
-      // Create new stream from current audio
-      const stream = (this.audio as HTMLAudioElement & { captureStream: () => MediaStream }).captureStream();
-      this.streamSourceNode = this.audioContext.createMediaStreamSource(stream);
-
-      // Connect ONLY to analyser (NOT to destination)
-      this.streamSourceNode.connect(this.analyserNode);
-
-      // Resume audio context if suspended
-      if (this.audioContext.state === 'suspended') {
-        this.audioContext.resume();
-      }
-    } catch (error) {
-      console.error('Failed to reconnect visualizer stream:', error);
-    }
-  }
-
   // Called when track changes to refresh visualizer connection
   refreshVisualizer(): void {
-    if (this.visualizerInitialized) {
-      this.reconnectVisualizerStream();
-    }
+    // With MediaElementSource, we don't need to reconnect on track change
+    // Just ensure audio context is resumed
+    this.resumeAudioContext();
   }
 
   // Get analyser node (returns null if not initialized)
@@ -157,9 +132,10 @@ class AudioPlayerService {
     this.audio.addEventListener('pause', () => {
       if (!this.audio.ended) {
         store().setState('paused');
-        // Update MediaSession playback state
+        // Update MediaSession playback state and position
         if (this.mediaSessionEnabled) {
           navigator.mediaSession.playbackState = 'paused';
+          this.updatePositionState();
         }
       }
     });
@@ -243,17 +219,40 @@ class AudioPlayerService {
 
     // Use BASE_URL for correct path on GitHub Pages
     const baseUrl = import.meta.env.BASE_URL || '/';
+
+    // Build artwork array - use cover art if available, otherwise fallback to PWA icons
+    const artwork: MediaImage[] = this.currentCoverArt
+      ? [{ src: this.currentCoverArt, sizes: '512x512', type: 'image/jpeg' }]
+      : [
+          { src: `${baseUrl}pwa-192x192.svg`, sizes: '192x192', type: 'image/svg+xml' },
+          { src: `${baseUrl}pwa-512x512.svg`, sizes: '512x512', type: 'image/svg+xml' }
+        ];
+
     navigator.mediaSession.metadata = new MediaMetadata({
       title: track.title || track.fileName,
       artist: track.artist || track.channelName,
       album: track.album || '',
-      artwork: [
-        { src: `${baseUrl}pwa-192x192.svg`, sizes: '192x192', type: 'image/svg+xml' },
-        { src: `${baseUrl}pwa-512x512.svg`, sizes: '512x512', type: 'image/svg+xml' }
-      ]
+      artwork
     });
 
     this.updatePositionState();
+  }
+
+  // Update cover art for MediaSession (called asynchronously when metadata loads)
+  updateCoverArt(coverArtDataUrl: string | null): void {
+    this.currentCoverArt = coverArtDataUrl;
+    // Refresh MediaSession with new artwork
+    if (this.mediaSessionEnabled && coverArtDataUrl) {
+      const track = usePlayerStore.getState().currentTrack;
+      if (track) {
+        navigator.mediaSession.metadata = new MediaMetadata({
+          title: track.title || track.fileName,
+          artist: track.artist || track.channelName,
+          album: track.album || '',
+          artwork: [{ src: coverArtDataUrl, sizes: '512x512', type: 'image/jpeg' }]
+        });
+      }
+    }
   }
 
   private updatePositionState() {
@@ -279,6 +278,11 @@ class AudioPlayerService {
     } catch {
       // Ignore errors (some browsers don't support this)
     }
+  }
+
+  // Force update position state (call after seek or play)
+  forceUpdatePositionState(): void {
+    this.updatePositionState();
   }
 
   private async getPlaybackUrl(track: Track): Promise<string> {
@@ -320,6 +324,9 @@ class AudioPlayerService {
     // Set current track
     store.setCurrentTrack(track);
     store.setState('loading');
+
+    // Clear previous cover art for new track
+    this.currentCoverArt = null;
 
     try {
       // Stop current playback and cleanup old blob URL if any

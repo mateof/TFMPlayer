@@ -1,6 +1,6 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useParams } from 'react-router-dom';
-import { Play, Shuffle, Download, Music, Trash2, Check, CloudOff, Cloud, WifiOff } from 'lucide-react';
+import { Play, Shuffle, Download, Music, Trash2, Check, CloudOff, Cloud, WifiOff, GripVertical } from 'lucide-react';
 import { Header } from '@/components/layout/Header';
 import { Button } from '@/components/common/Button';
 import { LoadingScreen } from '@/components/common/Spinner';
@@ -27,9 +27,12 @@ export function PlaylistDetailPage() {
   const [loading, setLoading] = useState(true);
   const [playlist, setPlaylist] = useState<PlaylistDetail | null>(null);
   const [cachedTrackIds, setCachedTrackIds] = useState<Set<string>>(new Set());
+  const [coverArts, setCoverArts] = useState<Record<string, string>>({});
   const [isOffline, setIsOffline] = useState(false);
   const [isOfflineMode, setIsOfflineMode] = useState(false);
   const [togglingOffline, setTogglingOffline] = useState(false);
+  const [draggedIndex, setDraggedIndex] = useState<number | null>(null);
+  const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
 
   useEffect(() => {
     if (id) {
@@ -118,12 +121,80 @@ export function PlaylistDetailPage() {
 
   const updateCacheStatus = async (tracks: Track[]) => {
     const cachedIds = new Set<string>();
+    const newCoverArts: Record<string, string> = {};
+
     for (const track of tracks) {
       const isCached = await cacheService.isTrackCached(track.fileId);
-      if (isCached) cachedIds.add(track.fileId);
+      if (isCached) {
+        cachedIds.add(track.fileId);
+        // Also load cover art for cached tracks
+        const coverArt = await cacheService.getCoverArt(track.fileId);
+        if (coverArt) {
+          newCoverArts[track.fileId] = coverArt;
+        }
+      }
     }
+
     setCachedTrackIds(cachedIds);
+    if (Object.keys(newCoverArts).length > 0) {
+      setCoverArts(prev => ({ ...prev, ...newCoverArts }));
+    }
   };
+
+  // Drag and drop handlers for track reordering
+  const handleDragStart = useCallback((e: React.DragEvent, index: number) => {
+    setDraggedIndex(index);
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', index.toString());
+  }, []);
+
+  const handleDragOver = useCallback((e: React.DragEvent, index: number) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    setDragOverIndex(index);
+  }, []);
+
+  const handleDragLeave = useCallback(() => {
+    setDragOverIndex(null);
+  }, []);
+
+  const handleDrop = useCallback(async (e: React.DragEvent, toIndex: number) => {
+    e.preventDefault();
+    const fromIndex = draggedIndex;
+    setDraggedIndex(null);
+    setDragOverIndex(null);
+
+    if (fromIndex === null || fromIndex === toIndex || !playlist || isOfflineMode) return;
+
+    // Create new track order
+    const newTracks = [...playlist.tracks];
+    const [movedTrack] = newTracks.splice(fromIndex, 1);
+    newTracks.splice(toIndex, 0, movedTrack);
+
+    // Update local state immediately for responsiveness
+    setPlaylist({ ...playlist, tracks: newTracks });
+
+    // Save to server
+    try {
+      const trackIds = newTracks.map(t => t.fileId);
+      await playlistsApi.reorderTracks(id!, trackIds);
+
+      // Update offline playlist if saved
+      if (isOffline) {
+        await saveOfflinePlaylist(id!, playlist.name, playlist.description, newTracks);
+      }
+    } catch (error) {
+      console.error('Failed to reorder tracks:', error);
+      addToast('Failed to save track order', 'error');
+      // Revert on error
+      loadPlaylist();
+    }
+  }, [draggedIndex, playlist, isOfflineMode, id, isOffline, addToast]);
+
+  const handleDragEnd = useCallback(() => {
+    setDraggedIndex(null);
+    setDragOverIndex(null);
+  }, []);
 
   const handlePlayAll = () => {
     if (!playlist?.tracks.length) return;
@@ -321,14 +392,29 @@ export function PlaylistDetailPage() {
             {playlist.tracks.map((track, index) => {
               const isCurrentTrack = currentTrack?.fileId === track.fileId;
               const isCached = cachedTrackIds.has(track.fileId);
+              const coverArt = coverArts[track.fileId];
               return (
                 <div
                   key={track.fileId}
-                  onClick={() => handlePlayTrack(track, index)}
-                  className={`w-full flex items-center gap-4 p-4 transition-colors touch-manipulation text-left cursor-pointer ${
+                  draggable={!isOfflineMode}
+                  onDragStart={(e) => handleDragStart(e, index)}
+                  onDragOver={(e) => handleDragOver(e, index)}
+                  onDragLeave={handleDragLeave}
+                  onDrop={(e) => handleDrop(e, index)}
+                  onDragEnd={handleDragEnd}
+                  className={`w-full flex items-center gap-3 p-4 transition-all touch-manipulation text-left ${
                     isCurrentTrack ? 'bg-emerald-500/10' : 'hover:bg-slate-800'
-                  }`}
+                  } ${draggedIndex === index ? 'opacity-50 scale-95' : ''} ${
+                    dragOverIndex === index && draggedIndex !== index
+                      ? 'border-t-2 border-emerald-400'
+                      : ''
+                  } ${!isOfflineMode ? 'cursor-grab active:cursor-grabbing' : 'cursor-pointer'}`}
                 >
+                  {!isOfflineMode && (
+                    <div className="text-slate-500 cursor-grab active:cursor-grabbing touch-none">
+                      <GripVertical className="w-4 h-4" />
+                    </div>
+                  )}
                   <span className={`w-6 text-center text-sm ${isCurrentTrack ? 'text-emerald-400' : 'text-slate-500'}`}>
                     {isCurrentTrack && isPlaying ? (
                       <div className="flex justify-center gap-0.5">
@@ -340,15 +426,25 @@ export function PlaylistDetailPage() {
                       index + 1
                     )}
                   </span>
-                  <div className="w-10 h-10 bg-slate-700 rounded-lg flex items-center justify-center flex-shrink-0 relative">
-                    <Music className={`w-5 h-5 ${isCurrentTrack ? 'text-emerald-400' : 'text-slate-400'}`} />
-                    {isCached && (
+                  <div
+                    className="w-10 h-10 bg-slate-700 rounded-lg flex items-center justify-center flex-shrink-0 relative overflow-hidden cursor-pointer"
+                    onClick={() => handlePlayTrack(track, index)}
+                  >
+                    {coverArt ? (
+                      <img src={coverArt} alt="Cover" className="w-full h-full object-cover" />
+                    ) : (
+                      <Music className={`w-5 h-5 ${isCurrentTrack ? 'text-emerald-400' : 'text-slate-400'}`} />
+                    )}
+                    {isCached && !coverArt && (
                       <div className="absolute -bottom-1 -right-1 w-4 h-4 bg-emerald-500 rounded-full flex items-center justify-center">
                         <Check className="w-2.5 h-2.5 text-white" />
                       </div>
                     )}
                   </div>
-                  <div className="flex-1 min-w-0">
+                  <div
+                    className="flex-1 min-w-0 cursor-pointer"
+                    onClick={() => handlePlayTrack(track, index)}
+                  >
                     <p className={`text-sm truncate ${isCurrentTrack ? 'text-emerald-400' : 'text-white'}`}>
                       {track.title || track.fileName}
                     </p>

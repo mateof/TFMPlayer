@@ -1,5 +1,6 @@
-import { db, type CachedTrackEntity } from '@/db/database';
+import { db, type CachedTrackEntity, updateTrackCoverArt } from '@/db/database';
 import type { Track } from '@/types/models';
+import * as mm from 'music-metadata';
 
 class CacheService {
   // Check if a track is cached
@@ -69,6 +70,25 @@ class CacheService {
       // Combine chunks into blob
       const blob = new Blob(chunks, { type: 'audio/mpeg' });
 
+      // Extract cover art from the audio file
+      let coverArt: string | undefined;
+      try {
+        const buffer = await blob.arrayBuffer();
+        const uint8Array = new Uint8Array(buffer);
+        const metadata = await mm.parseBuffer(uint8Array, {
+          mimeType: blob.type || 'audio/mpeg',
+          size: blob.size
+        });
+
+        if (metadata.common.picture && metadata.common.picture.length > 0) {
+          const pic = metadata.common.picture[0];
+          const base64 = this.arrayBufferToBase64(pic.data);
+          coverArt = `data:${pic.format};base64,${base64}`;
+        }
+      } catch (e) {
+        console.warn('Failed to extract cover art:', e);
+      }
+
       // Save to IndexedDB
       const cachedTrack: CachedTrackEntity = {
         id: track.fileId,
@@ -82,7 +102,8 @@ class CacheService {
         album: track.album,
         streamUrl: track.streamUrl,
         cachedAt: new Date(),
-        blob
+        blob,
+        coverArt
       };
 
       await db.cachedTracks.put(cachedTrack);
@@ -169,6 +190,27 @@ class CacheService {
     }
 
     return removedCount;
+  }
+
+  // Helper to convert array buffer to base64
+  private arrayBufferToBase64(buffer: Uint8Array): string {
+    let binary = '';
+    const len = buffer.byteLength;
+    for (let i = 0; i < len; i++) {
+      binary += String.fromCharCode(buffer[i]);
+    }
+    return btoa(binary);
+  }
+
+  // Update cover art for an existing cached track
+  async updateCoverArt(trackId: string, coverArt: string): Promise<void> {
+    await updateTrackCoverArt(trackId, coverArt);
+  }
+
+  // Get cover art for a track (from cache)
+  async getCoverArt(trackId: string): Promise<string | undefined> {
+    const track = await db.cachedTracks.get(trackId);
+    return track?.coverArt;
   }
 }
 

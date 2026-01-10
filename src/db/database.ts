@@ -24,6 +24,7 @@ export interface CachedTrackEntity {
   cachedAt: Date;
   lastPlayedAt?: Date;
   blob: Blob;
+  coverArt?: string; // Base64 data URL for album art
 }
 
 export interface OfflinePlaylistEntity {
@@ -92,6 +93,16 @@ class TFMAudioDatabase extends Dexie {
 
     // Version 2: Add cached playlists table
     this.version(2).stores({
+      serverConfig: '++id',
+      cachedTracks: 'id, channelId, cachedAt, lastPlayedAt',
+      offlinePlaylists: 'id, autoSync',
+      downloadQueue: '++id, trackId, status, addedAt',
+      playHistory: '++id, trackId, playedAt',
+      cachedPlaylists: 'id, cachedAt'
+    });
+
+    // Version 3: Add coverArt field to cachedTracks (no index change needed)
+    this.version(3).stores({
       serverConfig: '++id',
       cachedTracks: 'id, channelId, cachedAt, lastPlayedAt',
       offlinePlaylists: 'id, autoSync',
@@ -197,4 +208,14 @@ export async function updateCachedPlaylist(playlist: {
 
 export async function deleteCachedPlaylist(id: string): Promise<void> {
   await db.cachedPlaylists.delete(id);
+}
+
+// Cover art helpers
+export async function updateTrackCoverArt(trackId: string, coverArt: string): Promise<void> {
+  await db.cachedTracks.update(trackId, { coverArt });
+}
+
+export async function getTrackCoverArt(trackId: string): Promise<string | undefined> {
+  const track = await db.cachedTracks.get(trackId);
+  return track?.coverArt;
 }

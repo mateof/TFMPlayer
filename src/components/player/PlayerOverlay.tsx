@@ -14,26 +14,33 @@ import {
   Plus,
   X,
   Loader2,
-  Activity
+  Activity,
+  GripVertical
 } from 'lucide-react';
 import { useAudioPlayer } from '@/hooks/useAudioPlayer';
 import { formatDuration, formatFileSize } from '@/utils/format';
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { PlaylistPicker } from '@/components/playlists/PlaylistPicker';
 import { useUiStore } from '@/stores/uiStore';
 import { usePlayerStore } from '@/stores/playerStore';
 import { audioMetadataService, type AudioMetadata } from '@/services/audio/AudioMetadataService';
+import { audioPlayer } from '@/services/audio/AudioPlayerService';
+import { cacheService } from '@/services/cache/CacheService';
 import { AudioEqualizer } from './AudioEqualizer';
 
 export function PlayerOverlay() {
   const setPlayerExpanded = useUiStore((s) => s.setPlayerExpanded);
   const showEqualizer = usePlayerStore((s) => s.showEqualizer);
   const toggleEqualizer = usePlayerStore((s) => s.toggleEqualizer);
+  const moveInQueue = usePlayerStore((s) => s.moveInQueue);
   const [showQueue, setShowQueue] = useState(false);
   const [showPlaylistPicker, setShowPlaylistPicker] = useState(false);
   const [isFlipped, setIsFlipped] = useState(false);
   const [metadata, setMetadata] = useState<AudioMetadata | null>(null);
   const [loadingMetadata, setLoadingMetadata] = useState(false);
+  const [coverArts, setCoverArts] = useState<Record<string, string>>({});
+  const [draggedIndex, setDraggedIndex] = useState<number | null>(null);
+  const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
   const queueListRef = useRef<HTMLDivElement>(null);
 
   const {
@@ -109,6 +116,7 @@ export function PlayerOverlay() {
   useEffect(() => {
     if (!currentTrack) {
       setMetadata(null);
+      audioPlayer.updateCoverArt(null);
       return;
     }
 
@@ -124,6 +132,11 @@ export function PlayerOverlay() {
           currentTrack.fileSize
         );
         setMetadata(meta);
+
+        // Update MediaSession cover art if available
+        if (meta?.coverArt) {
+          audioPlayer.updateCoverArt(meta.coverArt);
+        }
       } catch (error) {
         console.error('Failed to load metadata:', error);
       } finally {
@@ -135,6 +148,68 @@ export function PlayerOverlay() {
     const timeout = setTimeout(loadMetadata, 500);
     return () => clearTimeout(timeout);
   }, [currentTrack?.fileId]);
+
+  // Load cover arts for queue tracks
+  useEffect(() => {
+    const loadCoverArts = async () => {
+      const newCoverArts: Record<string, string> = {};
+
+      for (const track of queue) {
+        // Skip if already loaded
+        if (coverArts[track.fileId]) {
+          newCoverArts[track.fileId] = coverArts[track.fileId];
+          continue;
+        }
+
+        // Try to get from cache
+        const cached = await cacheService.getCoverArt(track.fileId);
+        if (cached) {
+          newCoverArts[track.fileId] = cached;
+        }
+      }
+
+      if (Object.keys(newCoverArts).length > 0) {
+        setCoverArts(prev => ({ ...prev, ...newCoverArts }));
+      }
+    };
+
+    if (queue.length > 0) {
+      loadCoverArts();
+    }
+  }, [queue]);
+
+  // Drag and drop handlers for queue reordering
+  const handleDragStart = useCallback((e: React.DragEvent, index: number) => {
+    setDraggedIndex(index);
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', index.toString());
+  }, []);
+
+  const handleDragOver = useCallback((e: React.DragEvent, index: number) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    setDragOverIndex(index);
+  }, []);
+
+  const handleDragLeave = useCallback(() => {
+    setDragOverIndex(null);
+  }, []);
+
+  const handleDrop = useCallback((e: React.DragEvent, toIndex: number) => {
+    e.preventDefault();
+    const fromIndex = draggedIndex;
+    setDraggedIndex(null);
+    setDragOverIndex(null);
+
+    if (fromIndex !== null && fromIndex !== toIndex) {
+      moveInQueue(fromIndex, toIndex);
+    }
+  }, [draggedIndex, moveInQueue]);
+
+  const handleDragEnd = useCallback(() => {
+    setDraggedIndex(null);
+    setDragOverIndex(null);
+  }, []);
 
   const handleFlip = () => {
     setIsFlipped(!isFlipped);
@@ -209,23 +284,49 @@ export function PlayerOverlay() {
         >
           <div className="space-y-2 pb-4">
             {queue.map((track, index) => (
-              <button
+              <div
                 key={`${track.fileId}-${index}`}
                 data-index={index}
-                onClick={() => playAtIndex(index)}
-                className={`w-full flex items-center gap-3 p-3 rounded-lg transition-colors ${
+                draggable
+                onDragStart={(e) => handleDragStart(e, index)}
+                onDragOver={(e) => handleDragOver(e, index)}
+                onDragLeave={handleDragLeave}
+                onDrop={(e) => handleDrop(e, index)}
+                onDragEnd={handleDragEnd}
+                className={`w-full flex items-center gap-2 p-3 rounded-lg transition-all cursor-grab active:cursor-grabbing ${
                   index === currentIndex
                     ? 'bg-emerald-500/20 border border-emerald-500/50'
                     : 'bg-slate-800 hover:bg-slate-700'
+                } ${draggedIndex === index ? 'opacity-50 scale-95' : ''} ${
+                  dragOverIndex === index && draggedIndex !== index
+                    ? 'border-t-2 border-emerald-400'
+                    : ''
                 }`}
               >
+                <div className="text-slate-500 cursor-grab active:cursor-grabbing touch-none">
+                  <GripVertical className="w-4 h-4" />
+                </div>
                 <span className="w-6 text-center text-slate-400 text-sm">
                   {index + 1}
                 </span>
-                <div className="w-10 h-10 bg-slate-700 rounded flex items-center justify-center flex-shrink-0">
-                  <Music className="w-5 h-5 text-slate-400" />
+                <div
+                  className="w-10 h-10 bg-slate-700 rounded flex items-center justify-center flex-shrink-0 overflow-hidden"
+                  onClick={() => playAtIndex(index)}
+                >
+                  {coverArts[track.fileId] ? (
+                    <img
+                      src={coverArts[track.fileId]}
+                      alt="Cover"
+                      className="w-full h-full object-cover"
+                    />
+                  ) : (
+                    <Music className="w-5 h-5 text-slate-400" />
+                  )}
                 </div>
-                <div className="flex-1 min-w-0 text-left">
+                <div
+                  className="flex-1 min-w-0 text-left cursor-pointer"
+                  onClick={() => playAtIndex(index)}
+                >
                   <p className={`text-sm truncate ${index === currentIndex ? 'text-emerald-400' : 'text-white'}`}>
                     {track.title || track.fileName}
                   </p>
@@ -240,7 +341,7 @@ export function PlayerOverlay() {
                     <div className="w-1 h-4 bg-emerald-400 animate-pulse delay-150" />
                   </div>
                 )}
-              </button>
+              </div>
             ))}
           </div>
         </div>
