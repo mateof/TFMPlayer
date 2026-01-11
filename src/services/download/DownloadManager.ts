@@ -7,14 +7,17 @@ import { create } from 'zustand';
 // Download store for reactive state
 interface DownloadState {
   activeDownloads: Map<string, number>; // trackId -> progress
+  completedDownloads: Set<string>; // trackIds that just completed (for reactive updates)
   isProcessing: boolean;
   setProgress: (trackId: string, progress: number) => void;
-  removeProgress: (trackId: string) => void;
+  markCompleted: (trackId: string) => void;
+  clearCompleted: (trackId: string) => void;
   setProcessing: (processing: boolean) => void;
 }
 
 export const useDownloadStore = create<DownloadState>((set) => ({
   activeDownloads: new Map(),
+  completedDownloads: new Set(),
   isProcessing: false,
   setProgress: (trackId, progress) =>
     set((state) => {
@@ -22,11 +25,19 @@ export const useDownloadStore = create<DownloadState>((set) => ({
       newMap.set(trackId, progress);
       return { activeDownloads: newMap };
     }),
-  removeProgress: (trackId) =>
+  markCompleted: (trackId) =>
     set((state) => {
       const newMap = new Map(state.activeDownloads);
       newMap.delete(trackId);
-      return { activeDownloads: newMap };
+      const newCompleted = new Set(state.completedDownloads);
+      newCompleted.add(trackId);
+      return { activeDownloads: newMap, completedDownloads: newCompleted };
+    }),
+  clearCompleted: (trackId) =>
+    set((state) => {
+      const newCompleted = new Set(state.completedDownloads);
+      newCompleted.delete(trackId);
+      return { completedDownloads: newCompleted };
     }),
   setProcessing: (processing) => set({ isProcessing: processing })
 }));
@@ -262,7 +273,7 @@ class DownloadManager {
 
         await db.downloadQueue.delete(item.id!);
         console.log('Download completed (chunked):', item.fileName, 'Size:', blob.size);
-        useDownloadStore.getState().removeProgress(item.trackId);
+        useDownloadStore.getState().markCompleted(item.trackId);
         return;
       }
 
@@ -319,7 +330,7 @@ class DownloadManager {
       await db.downloadQueue.delete(item.id!);
       console.log('Download completed:', item.fileName, 'Size:', blob.size);
 
-      useDownloadStore.getState().removeProgress(item.trackId);
+      useDownloadStore.getState().markCompleted(item.trackId);
     } catch (error) {
       if (error instanceof Error && error.name === 'AbortError') {
         await db.downloadQueue.update(item.id!, { status: 'cancelled' });
@@ -330,7 +341,10 @@ class DownloadManager {
           errorMessage: error instanceof Error ? error.message : 'Unknown error'
         });
       }
-      useDownloadStore.getState().removeProgress(item.trackId);
+      // For failed/cancelled, just remove from active (don't mark as completed)
+      const newMap = new Map(useDownloadStore.getState().activeDownloads);
+      newMap.delete(item.trackId);
+      useDownloadStore.setState({ activeDownloads: newMap });
     } finally {
       this.abortControllers.delete(item.trackId);
     }

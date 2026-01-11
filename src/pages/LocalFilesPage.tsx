@@ -49,6 +49,8 @@ export function LocalFilesPage() {
   const { addToast, getScrollPosition } = useUiStore();
   const { play } = useAudioPlayer();
   const activeDownloads = useDownloadStore((state) => state.activeDownloads);
+  const completedDownloads = useDownloadStore((state) => state.completedDownloads);
+  const clearCompleted = useDownloadStore((state) => state.clearCompleted);
 
   // Breadcrumb type
   interface FolderBreadcrumb {
@@ -219,7 +221,26 @@ export function LocalFilesPage() {
     }
   }, [loading, files.length, location.pathname, getScrollPosition]);
 
-  // Refresh cache status when downloads complete
+  // Immediately update cache status when downloads complete
+  useEffect(() => {
+    if (!files.length) return;
+
+    const audioFiles = files.filter(f => f.category === 'Audio');
+    // Check if any completed download belongs to this view
+    const completedInView = audioFiles.filter(f => completedDownloads.has(f.id));
+    if (completedInView.length > 0) {
+      // Immediately add to cached set
+      setCachedTrackIds(prev => {
+        const newSet = new Set(prev);
+        completedInView.forEach(f => newSet.add(f.id));
+        return newSet;
+      });
+      // Clear the completed flags
+      completedInView.forEach(f => clearCompleted(f.id));
+    }
+  }, [completedDownloads, files, clearCompleted]);
+
+  // Refresh cache status periodically when downloads are active
   useEffect(() => {
     if (!files.length) return;
 
@@ -227,7 +248,8 @@ export function LocalFilesPage() {
     if (audioFiles.length === 0) return;
 
     const interval = setInterval(async () => {
-      if (activeDownloads.size > 0) {
+      const hasActiveDownloads = audioFiles.some(f => activeDownloads.has(f.id));
+      if (hasActiveDownloads) {
         const newCachedIds = new Set(cachedTrackIds);
         for (const file of audioFiles) {
           const isCached = await cacheService.isTrackCached(file.id);

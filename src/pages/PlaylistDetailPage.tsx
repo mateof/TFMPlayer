@@ -23,6 +23,8 @@ export function PlaylistDetailPage() {
   const { addToast } = useUiStore();
   const { play, currentTrack, isPlaying } = useAudioPlayer();
   const activeDownloads = useDownloadStore((state) => state.activeDownloads);
+  const completedDownloads = useDownloadStore((state) => state.completedDownloads);
+  const clearCompleted = useDownloadStore((state) => state.clearCompleted);
 
   const [loading, setLoading] = useState(true);
   const [playlist, setPlaylist] = useState<PlaylistDetail | null>(null);
@@ -66,14 +68,34 @@ export function PlaylistDetailPage() {
     scrollContainerRef.current?.scrollTo({ top: 0, behavior: 'smooth' });
   }, []);
 
-  // Refresh cache status when downloads complete
+  // Immediately update cache status when downloads complete
+  useEffect(() => {
+    if (!playlist?.tracks.length) return;
+
+    // Check if any completed download belongs to this playlist
+    const completedInPlaylist = playlist.tracks.filter(t => completedDownloads.has(t.fileId));
+    if (completedInPlaylist.length > 0) {
+      // Immediately add to cached set
+      setCachedTrackIds(prev => {
+        const newSet = new Set(prev);
+        completedInPlaylist.forEach(t => newSet.add(t.fileId));
+        return newSet;
+      });
+      // Clear the completed flags
+      completedInPlaylist.forEach(t => clearCompleted(t.fileId));
+      // Also update full cache status (for cover art, duration, etc.)
+      updateCacheStatus(playlist.tracks);
+    }
+  }, [completedDownloads, playlist?.tracks, clearCompleted]);
+
+  // Refresh cache status periodically when downloads are active
   useEffect(() => {
     if (!playlist?.tracks.length) return;
 
     const interval = setInterval(async () => {
       // Only refresh if there are active downloads for tracks in this playlist
       const hasActiveDownloads = playlist.tracks.some(t => activeDownloads.has(t.fileId));
-      if (hasActiveDownloads || activeDownloads.size > 0) {
+      if (hasActiveDownloads) {
         await updateCacheStatus(playlist.tracks);
       }
     }, 2000);

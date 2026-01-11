@@ -55,6 +55,8 @@ export function ChannelDetailPage() {
   const { addToast, getScrollPosition } = useUiStore();
   const { play } = useAudioPlayer();
   const activeDownloads = useDownloadStore((state) => state.activeDownloads);
+  const completedDownloads = useDownloadStore((state) => state.completedDownloads);
+  const clearCompleted = useDownloadStore((state) => state.clearCompleted);
 
   // State
   const [loading, setLoading] = useState(true);
@@ -155,7 +157,26 @@ export function ChannelDetailPage() {
   const currentFolderId = searchParams.get('folder') || undefined;
   const folderPathParam = searchParams.get('path');
 
-  // Refresh cache status when downloads complete
+  // Immediately update cache status when downloads complete
+  useEffect(() => {
+    if (!files.length) return;
+
+    const audioFiles = files.filter(f => f.category === 'Audio');
+    // Check if any completed download belongs to this view
+    const completedInView = audioFiles.filter(f => completedDownloads.has(f.id));
+    if (completedInView.length > 0) {
+      // Immediately add to cached set
+      setCachedTrackIds(prev => {
+        const newSet = new Set(prev);
+        completedInView.forEach(f => newSet.add(f.id));
+        return newSet;
+      });
+      // Clear the completed flags
+      completedInView.forEach(f => clearCompleted(f.id));
+    }
+  }, [completedDownloads, files, clearCompleted]);
+
+  // Refresh cache status periodically when downloads are active
   useEffect(() => {
     if (!files.length) return;
 
@@ -165,7 +186,7 @@ export function ChannelDetailPage() {
     const interval = setInterval(async () => {
       // Only refresh if there are active downloads for files in this view
       const hasActiveDownloads = audioFiles.some(f => activeDownloads.has(f.id));
-      if (hasActiveDownloads || activeDownloads.size > 0) {
+      if (hasActiveDownloads) {
         const newCachedIds = new Set(cachedTrackIds);
         for (const file of audioFiles) {
           const isCached = await cacheService.isTrackCached(file.id);

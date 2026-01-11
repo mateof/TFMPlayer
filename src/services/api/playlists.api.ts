@@ -94,6 +94,6 @@ export const playlistsApi = {
 
   async reorderTracks(playlistId: string, trackIds: string[]): Promise<void> {
     const client = await apiClient.getClient();
-    await client.put(`/api/mobile/playlists/${playlistId}/tracks/reorder`, { trackIds });
+    await client.put(`/api/mobile/playlists/${playlistId}/tracks/reorder`, { OrderedFileIds: trackIds });
   }
 };
