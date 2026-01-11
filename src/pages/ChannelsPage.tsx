@@ -120,14 +120,26 @@ export function ChannelsPage() {
     { key: 'local', label: 'Local' }
   ];
 
+  // Search button for header when scrolled
+  const searchAction = isScrolled && !searchExpanded ? (
+    <button
+      onClick={() => setSearchExpanded(true)}
+      className={`p-2 rounded-lg transition-colors ${
+        searchQuery ? 'bg-emerald-500 text-white' : 'text-slate-400 hover:text-white'
+      }`}
+    >
+      <Search className="w-5 h-5" />
+    </button>
+  ) : null;
+
   return (
     <div className="flex flex-col h-screen overflow-hidden">
-      <Header title="Channels" />
+      <Header title="Channels" actions={searchAction} />
 
       {/* Sticky header with search and tabs */}
       <div className="sticky top-0 z-10 bg-slate-900">
-        {/* Search - full when not scrolled or expanded, compact button when scrolled */}
-        {!isScrolled || searchExpanded ? (
+        {/* Search - full when not scrolled or when expanded */}
+        {(!isScrolled || searchExpanded) && (
           <div className="px-4 py-3 flex items-center gap-2">
             <div className="flex-1">
               <Input
@@ -138,11 +150,11 @@ export function ChannelsPage() {
                 icon={<Search className="w-4 h-4" />}
               />
             </div>
-            {isScrolled && searchExpanded && (
+            {searchExpanded && (
               <button
                 onClick={() => {
                   setSearchExpanded(false);
-                  setSearchQuery('');
+                  if (isScrolled) setSearchQuery('');
                 }}
                 className="p-2 text-slate-400 hover:text-white"
               >
@@ -150,21 +162,12 @@ export function ChannelsPage() {
               </button>
             )}
           </div>
-        ) : (
-          <div className="px-4 py-2 flex items-center gap-2">
-            <button
-              onClick={() => setSearchExpanded(true)}
-              className={`p-2 rounded-lg transition-colors ${
-                searchQuery ? 'bg-emerald-500 text-white' : 'bg-slate-800 text-slate-400 hover:text-white'
-              }`}
-            >
-              <Search className="w-5 h-5" />
-            </button>
-            {searchQuery && (
-              <span className="text-sm text-emerald-400 truncate flex-1">
-                "{searchQuery}"
-              </span>
-            )}
+        )}
+
+        {/* Active search indicator when scrolled and search collapsed */}
+        {isScrolled && !searchExpanded && searchQuery && (
+          <div className="px-4 py-1 text-sm text-emerald-400">
+            Searching: "{searchQuery}"
           </div>
         )}
 
