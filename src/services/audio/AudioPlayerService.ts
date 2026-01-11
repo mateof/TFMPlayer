@@ -9,9 +9,10 @@ class AudioPlayerService {
   private currentBlobUrl: string | null = null;
 
   // Web Audio API for visualizer (lazy initialization)
+  // Uses captureStream() to analyze audio WITHOUT affecting playback quality
   private audioContext: AudioContext | null = null;
   private analyserNode: AnalyserNode | null = null;
-  private sourceNode: MediaElementAudioSourceNode | null = null;
+  private streamSourceNode: MediaStreamAudioSourceNode | null = null;
   private visualizerInitialized = false;
 
   // Cover art for MediaSession
@@ -26,10 +27,11 @@ class AudioPlayerService {
   }
 
   // Initialize Web Audio API for visualizer (called on user interaction)
+  // Uses captureStream() - this does NOT affect audio quality as it creates a
+  // separate analysis stream while the original audio plays unchanged
   initVisualizer(): AnalyserNode | null {
-    // Only create once - MediaElementSource can only be created once per audio element
-    if (this.analyserNode && this.visualizerInitialized) {
-      // Just resume context if needed
+    // If already have an analyser, just resume context and return it
+    if (this.analyserNode && this.audioContext) {
       this.resumeAudioContext();
       return this.analyserNode;
     }
@@ -45,17 +47,12 @@ class AudioPlayerService {
       this.analyserNode.minDecibels = -90;
       this.analyserNode.maxDecibels = -10;
 
-      // Create source from audio element (can only be done once)
-      this.sourceNode = this.audioContext.createMediaElementSource(this.audio);
-
-      // Connect: source -> analyser -> destination
-      // Audio passes through analyser unchanged
-      this.sourceNode.connect(this.analyserNode);
-      this.analyserNode.connect(this.audioContext.destination);
-
       this.visualizerInitialized = true;
 
-      console.log('Visualizer initialized with MediaElementSource');
+      // Connect to current stream if audio is playing
+      this.connectVisualizerStream();
+
+      console.log('Visualizer initialized with captureStream (audio quality unaffected)');
       return this.analyserNode;
     } catch (error) {
       console.error('Failed to initialize visualizer:', error);
@@ -63,11 +60,47 @@ class AudioPlayerService {
     }
   }
 
+  // Connect visualizer to current audio stream using captureStream()
+  // This creates a copy of the audio for analysis without affecting playback
+  private connectVisualizerStream(): void {
+    if (!this.audioContext || !this.analyserNode) return;
+
+    try {
+      // Disconnect previous source if any
+      if (this.streamSourceNode) {
+        this.streamSourceNode.disconnect();
+        this.streamSourceNode = null;
+      }
+
+      // Use captureStream to get a MediaStream from the audio element
+      // This does NOT route audio through Web Audio API - it creates a separate stream for analysis
+      const audioElement = this.audio as HTMLAudioElement & { captureStream?: () => MediaStream };
+      if (audioElement.captureStream) {
+        const stream = audioElement.captureStream();
+        if (stream.getAudioTracks().length > 0) {
+          this.streamSourceNode = this.audioContext.createMediaStreamSource(stream);
+          // Only connect to analyser, NOT to destination (we don't want to hear it twice)
+          this.streamSourceNode.connect(this.analyserNode);
+          console.log('Visualizer connected via captureStream');
+        }
+      }
+    } catch (error) {
+      console.warn('Could not connect visualizer stream:', error);
+    }
+  }
+
   // Called when track changes to refresh visualizer connection
   refreshVisualizer(): void {
-    // With MediaElementSource, we don't need to reconnect on track change
-    // Just ensure audio context is resumed
+    // With captureStream, we need to reconnect when the track changes
+    // because the stream changes with the audio source
     this.resumeAudioContext();
+
+    // Reconnect after a small delay to ensure the new audio source is ready
+    if (this.visualizerInitialized) {
+      setTimeout(() => {
+        this.connectVisualizerStream();
+      }, 100);
+    }
   }
 
   // Get analyser node (returns null if not initialized)

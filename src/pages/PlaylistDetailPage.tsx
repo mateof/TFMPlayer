@@ -28,6 +28,7 @@ export function PlaylistDetailPage() {
   const [playlist, setPlaylist] = useState<PlaylistDetail | null>(null);
   const [cachedTrackIds, setCachedTrackIds] = useState<Set<string>>(new Set());
   const [coverArts, setCoverArts] = useState<Record<string, string>>({});
+  const [cachedDurations, setCachedDurations] = useState<Record<string, number>>({});
   const [isOffline, setIsOffline] = useState(false);
   const [isOfflineMode, setIsOfflineMode] = useState(false);
   const [togglingOffline, setTogglingOffline] = useState(false);
@@ -51,15 +52,15 @@ export function PlaylistDetailPage() {
 
     const handleScroll = () => {
       const scrollTop = container.scrollTop;
-      // Show compact header when scrolled past 150px (approximate header info height)
-      setIsScrolled(scrollTop > 150);
-      // Show scroll to top button when scrolled past 300px
-      setShowScrollTop(scrollTop > 300);
+      // Show compact header when scrolled past 200px (after playlist info section)
+      setIsScrolled(scrollTop > 200);
+      // Show scroll to top button when scrolled past 100px
+      setShowScrollTop(scrollTop > 100);
     };
 
     container.addEventListener('scroll', handleScroll, { passive: true });
     return () => container.removeEventListener('scroll', handleScroll);
-  }, []);
+  }, [loading]);
 
   const scrollToTop = useCallback(() => {
     scrollContainerRef.current?.scrollTo({ top: 0, behavior: 'smooth' });
@@ -147,15 +148,18 @@ export function PlaylistDetailPage() {
   const updateCacheStatus = async (tracks: Track[]) => {
     const cachedIds = new Set<string>();
     const newCoverArts: Record<string, string> = {};
+    const newDurations: Record<string, number> = {};
 
     for (const track of tracks) {
-      const isCached = await cacheService.isTrackCached(track.fileId);
-      if (isCached) {
+      const cachedTrack = await cacheService.getCachedTrack(track.fileId);
+      if (cachedTrack?.blob) {
         cachedIds.add(track.fileId);
-        // Also load cover art for cached tracks
-        const coverArt = await cacheService.getCoverArt(track.fileId);
-        if (coverArt) {
-          newCoverArts[track.fileId] = coverArt;
+        // Load cover art and duration from cached tracks
+        if (cachedTrack.coverArt) {
+          newCoverArts[track.fileId] = cachedTrack.coverArt;
+        }
+        if (cachedTrack.duration) {
+          newDurations[track.fileId] = cachedTrack.duration;
         }
       }
     }
@@ -163,6 +167,9 @@ export function PlaylistDetailPage() {
     setCachedTrackIds(cachedIds);
     if (Object.keys(newCoverArts).length > 0) {
       setCoverArts(prev => ({ ...prev, ...newCoverArts }));
+    }
+    if (Object.keys(newDurations).length > 0) {
+      setCachedDurations(prev => ({ ...prev, ...newDurations }));
     }
   };
 
@@ -327,7 +334,11 @@ export function PlaylistDetailPage() {
     );
   }
 
-  const totalDuration = playlist.tracks.reduce((acc, t) => acc + (t.duration || 0), 0);
+  // Calculate total duration - use cached durations when available
+  const totalDuration = playlist.tracks.reduce((acc, t) => {
+    const duration = cachedDurations[t.fileId] || t.duration || 0;
+    return acc + duration;
+  }, 0);
   const totalSize = playlist.tracks.reduce((acc, t) => acc + t.fileSize, 0);
   const cachedCount = cachedTrackIds.size;
 
@@ -335,46 +346,45 @@ export function PlaylistDetailPage() {
     <div className="flex flex-col h-screen overflow-hidden">
       <Header title={playlist.name} subtitle={playlist.description} showBack />
 
-      {/* Compact sticky header - appears when scrolled */}
-      {isScrolled && (
-        <div className="sticky top-14 z-20 bg-slate-900/95 backdrop-blur-sm border-b border-slate-700 px-4 py-2">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 bg-gradient-to-br from-emerald-500 to-cyan-500 rounded-lg flex items-center justify-center flex-shrink-0">
-              <Music className="w-5 h-5 text-white" />
-            </div>
-            <div className="flex-1 min-w-0">
-              <p className="text-white font-semibold text-sm truncate">{playlist.name}</p>
-              <p className="text-slate-400 text-xs">
-                {playlist.trackCount} tracks • {formatDuration(totalDuration)}
-              </p>
-            </div>
-            <button
-              onClick={handlePlayAll}
-              disabled={!playlist.tracks.length}
-              className="p-2 bg-emerald-500 hover:bg-emerald-600 disabled:opacity-50 disabled:cursor-not-allowed rounded-full transition-colors"
-            >
-              <Play className="w-4 h-4 text-white" fill="currentColor" />
-            </button>
-            <button
-              onClick={handleShufflePlay}
-              disabled={!playlist.tracks.length}
-              className="p-2 bg-slate-700 hover:bg-slate-600 disabled:opacity-50 disabled:cursor-not-allowed rounded-full transition-colors"
-            >
-              <Shuffle className="w-4 h-4 text-white" />
-            </button>
-            <button
-              onClick={handleToggleOffline}
-              disabled={isOfflineMode || togglingOffline}
-              className={`p-2 ${isOffline ? 'bg-emerald-500 hover:bg-emerald-600' : 'bg-slate-700 hover:bg-slate-600'} disabled:opacity-50 disabled:cursor-not-allowed rounded-full transition-colors`}
-            >
-              {isOffline ? <CloudOff className="w-4 h-4 text-white" /> : <Cloud className="w-4 h-4 text-white" />}
-            </button>
-          </div>
-        </div>
-      )}
-
       {/* Scrollable content */}
       <div ref={scrollContainerRef} className="flex-1 overflow-y-auto">
+        {/* Compact sticky header - appears when scrolled */}
+        <div className={`sticky top-0 z-20 transition-all duration-200 ${isScrolled ? 'opacity-100 translate-y-0' : 'opacity-0 -translate-y-full pointer-events-none'}`}>
+          <div className="bg-slate-900/95 backdrop-blur-sm border-b border-slate-700 px-4 py-2">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 bg-gradient-to-br from-emerald-500 to-cyan-500 rounded-lg flex items-center justify-center flex-shrink-0">
+                <Music className="w-5 h-5 text-white" />
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="text-white font-semibold text-sm truncate">{playlist.name}</p>
+                <p className="text-slate-400 text-xs">
+                  {playlist.trackCount} tracks{totalDuration > 0 ? ` • ${formatDuration(totalDuration)}` : ''}
+                </p>
+              </div>
+              <button
+                onClick={handlePlayAll}
+                disabled={!playlist.tracks.length}
+                className="p-2 bg-emerald-500 hover:bg-emerald-600 disabled:opacity-50 disabled:cursor-not-allowed rounded-full transition-colors"
+              >
+                <Play className="w-4 h-4 text-white" fill="currentColor" />
+              </button>
+              <button
+                onClick={handleShufflePlay}
+                disabled={!playlist.tracks.length}
+                className="p-2 bg-slate-700 hover:bg-slate-600 disabled:opacity-50 disabled:cursor-not-allowed rounded-full transition-colors"
+              >
+                <Shuffle className="w-4 h-4 text-white" />
+              </button>
+              <button
+                onClick={handleToggleOffline}
+                disabled={isOfflineMode || togglingOffline}
+                className={`p-2 ${isOffline ? 'bg-emerald-500 hover:bg-emerald-600' : 'bg-slate-700 hover:bg-slate-600'} disabled:opacity-50 disabled:cursor-not-allowed rounded-full transition-colors`}
+              >
+                {isOffline ? <CloudOff className="w-4 h-4 text-white" /> : <Cloud className="w-4 h-4 text-white" />}
+              </button>
+            </div>
+          </div>
+        </div>
         {/* Offline mode indicator */}
         {isOfflineMode && (
           <div className="flex items-center gap-2 px-4 py-2 bg-amber-500/20 text-amber-400 text-sm">
@@ -397,7 +407,7 @@ export function PlaylistDetailPage() {
             <div className="flex-1">
               <p className="text-white font-bold text-xl">{playlist.name}</p>
               <p className="text-slate-400 text-sm">
-                {playlist.trackCount} tracks • {formatDuration(totalDuration)}
+                {playlist.trackCount} tracks{totalDuration > 0 ? ` • ${formatDuration(totalDuration)}` : ''}
               </p>
               <p className="text-slate-500 text-xs">{formatFileSize(totalSize)}</p>
               {cachedCount > 0 && (
@@ -445,7 +455,7 @@ export function PlaylistDetailPage() {
         </div>
 
         {/* Track List */}
-        <div>
+        <div className="pb-32">
         {playlist.tracks.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-12 text-slate-400">
             <Music className="w-12 h-12 mb-4 opacity-50" />
@@ -492,16 +502,16 @@ export function PlaylistDetailPage() {
                     )}
                   </span>
                   <div
-                    className="w-10 h-10 bg-slate-700 rounded-lg flex items-center justify-center flex-shrink-0 relative overflow-hidden cursor-pointer"
+                    className="w-10 h-10 bg-slate-700 rounded-lg flex items-center justify-center flex-shrink-0 relative cursor-pointer"
                     onClick={() => handlePlayTrack(track, index)}
                   >
                     {coverArt ? (
-                      <img src={coverArt} alt="Cover" className="w-full h-full object-cover" />
+                      <img src={coverArt} alt="Cover" className="w-full h-full object-cover rounded-lg" />
                     ) : (
                       <Music className={`w-5 h-5 ${isCurrentTrack ? 'text-emerald-400' : 'text-slate-400'}`} />
                     )}
-                    {isCached && !coverArt && (
-                      <div className="absolute -bottom-1 -right-1 w-4 h-4 bg-emerald-500 rounded-full flex items-center justify-center">
+                    {isCached && (
+                      <div className="absolute -bottom-1 -right-1 w-4 h-4 bg-emerald-500 rounded-full flex items-center justify-center border border-slate-900">
                         <Check className="w-2.5 h-2.5 text-white" />
                       </div>
                     )}
@@ -515,7 +525,7 @@ export function PlaylistDetailPage() {
                     </p>
                     <p className="text-xs text-slate-400 truncate">
                       {track.artist || track.channelName}
-                      {track.duration ? ` • ${formatDuration(track.duration)}` : ''}
+                      {(cachedDurations[track.fileId] || track.duration) ? ` • ${formatDuration(cachedDurations[track.fileId] || track.duration || 0)}` : ''}
                     </p>
                   </div>
                   {/* Download status */}
