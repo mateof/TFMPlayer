@@ -18,6 +18,10 @@ class AudioPlayerService {
   // Cover art for MediaSession
   private currentCoverArt: string | null = null;
 
+  // Throttle position updates to avoid MediaSession issues
+  private lastPositionUpdate: number = 0;
+  private positionUpdateInterval: number = 5000; // Update every 5 seconds
+
   constructor() {
     this.audio = new Audio();
     this.audio.preload = 'metadata';
@@ -159,6 +163,11 @@ class AudioPlayerService {
       // Update MediaSession playback state
       if (this.mediaSessionEnabled) {
         navigator.mediaSession.playbackState = 'playing';
+        // Reset throttle timer and update position after a small delay to ensure currentTime is accurate
+        this.lastPositionUpdate = Date.now();
+        setTimeout(() => {
+          this.updatePositionState();
+        }, 150);
       }
     });
 
@@ -179,8 +188,13 @@ class AudioPlayerService {
 
     this.audio.addEventListener('timeupdate', () => {
       store().setPosition(this.audio.currentTime);
-      // Update MediaSession position state for notification progress bar
-      this.updatePositionState();
+      // Throttle MediaSession position updates to avoid issues
+      // The browser extrapolates position between updates
+      const now = Date.now();
+      if (now - this.lastPositionUpdate >= this.positionUpdateInterval) {
+        this.lastPositionUpdate = now;
+        this.updatePositionState();
+      }
     });
 
     this.audio.addEventListener('waiting', () => {
@@ -419,6 +433,8 @@ class AudioPlayerService {
         const newPosition = Math.max(0, Math.min(position, this.audio.duration));
         console.log('Seeking to:', newPosition, 'of', this.audio.duration);
         this.audio.currentTime = newPosition;
+        // Reset throttle timer and update position immediately after seek
+        this.lastPositionUpdate = Date.now();
         this.updatePositionState();
       }
     } catch (error) {
