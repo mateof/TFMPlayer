@@ -19,7 +19,7 @@ import {
 } from 'lucide-react';
 import { useAudioPlayer } from '@/hooks/useAudioPlayer';
 import { formatDuration, formatFileSize } from '@/utils/format';
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { PlaylistPicker } from '@/components/playlists/PlaylistPicker';
 import { useUiStore } from '@/stores/uiStore';
 import { usePlayerStore } from '@/stores/playerStore';
@@ -27,6 +27,75 @@ import { audioMetadataService, type AudioMetadata } from '@/services/audio/Audio
 import { audioPlayer } from '@/services/audio/AudioPlayerService';
 import { cacheService } from '@/services/cache/CacheService';
 import { AudioEqualizer } from './AudioEqualizer';
+
+// Swipe gesture hook
+function useSwipeGesture({
+  onSwipeLeft,
+  onSwipeRight,
+  onSwipeDown,
+  threshold = 50,
+  verticalThreshold = 100
+}: {
+  onSwipeLeft?: () => void;
+  onSwipeRight?: () => void;
+  onSwipeDown?: () => void;
+  threshold?: number;
+  verticalThreshold?: number;
+}) {
+  const [touchStart, setTouchStart] = useState<{ x: number; y: number } | null>(null);
+  const [touchDelta, setTouchDelta] = useState({ x: 0, y: 0 });
+  const [isSwiping, setIsSwiping] = useState(false);
+  const [swipeDirection, setSwipeDirection] = useState<'horizontal' | 'vertical' | null>(null);
+
+  const handlers = useMemo(() => ({
+    onTouchStart: (e: React.TouchEvent) => {
+      const touch = e.touches[0];
+      setTouchStart({ x: touch.clientX, y: touch.clientY });
+      setTouchDelta({ x: 0, y: 0 });
+      setIsSwiping(true);
+      setSwipeDirection(null);
+    },
+    onTouchMove: (e: React.TouchEvent) => {
+      if (!touchStart) return;
+      const touch = e.touches[0];
+      const deltaX = touch.clientX - touchStart.x;
+      const deltaY = touch.clientY - touchStart.y;
+
+      // Determine swipe direction on first significant movement
+      if (!swipeDirection && (Math.abs(deltaX) > 10 || Math.abs(deltaY) > 10)) {
+        setSwipeDirection(Math.abs(deltaX) > Math.abs(deltaY) ? 'horizontal' : 'vertical');
+      }
+
+      // Only track movement in the determined direction
+      if (swipeDirection === 'horizontal') {
+        setTouchDelta({ x: deltaX, y: 0 });
+      } else if (swipeDirection === 'vertical' && deltaY > 0) {
+        // Only allow downward swipe
+        setTouchDelta({ x: 0, y: deltaY });
+      }
+    },
+    onTouchEnd: () => {
+      if (swipeDirection === 'horizontal') {
+        if (touchDelta.x < -threshold && onSwipeLeft) {
+          onSwipeLeft();
+        } else if (touchDelta.x > threshold && onSwipeRight) {
+          onSwipeRight();
+        }
+      } else if (swipeDirection === 'vertical') {
+        if (touchDelta.y > verticalThreshold && onSwipeDown) {
+          onSwipeDown();
+        }
+      }
+
+      setTouchStart(null);
+      setTouchDelta({ x: 0, y: 0 });
+      setIsSwiping(false);
+      setSwipeDirection(null);
+    }
+  }), [touchStart, touchDelta, swipeDirection, threshold, verticalThreshold, onSwipeLeft, onSwipeRight, onSwipeDown]);
+
+  return { handlers, touchDelta, isSwiping, swipeDirection };
+}
 
 export function PlayerOverlay() {
   const setPlayerExpanded = useUiStore((s) => s.setPlayerExpanded);
@@ -215,10 +284,50 @@ export function PlayerOverlay() {
     setIsFlipped(!isFlipped);
   };
 
+  // Swipe gestures for album art card
+  const { handlers: cardSwipeHandlers, touchDelta, isSwiping, swipeDirection } = useSwipeGesture({
+    onSwipeLeft: () => {
+      if (queue.length > 1) next();
+    },
+    onSwipeRight: () => {
+      if (queue.length > 1) previous();
+    },
+    onSwipeDown: handleClose,
+    threshold: 80,
+    verticalThreshold: 120
+  });
+
+  // Calculate card transform based on swipe
+  const getCardTransform = () => {
+    if (!isSwiping) return {};
+
+    if (swipeDirection === 'horizontal') {
+      const rotation = touchDelta.x * 0.1; // Subtle rotation
+      const opacity = 1 - Math.abs(touchDelta.x) / 300;
+      return {
+        transform: `translateX(${touchDelta.x}px) rotate(${rotation}deg)`,
+        opacity: Math.max(0.5, opacity)
+      };
+    } else if (swipeDirection === 'vertical' && touchDelta.y > 0) {
+      const scale = 1 - touchDelta.y / 1000;
+      const opacity = 1 - touchDelta.y / 300;
+      return {
+        transform: `translateY(${touchDelta.y}px) scale(${Math.max(0.8, scale)})`,
+        opacity: Math.max(0.5, opacity)
+      };
+    }
+    return {};
+  };
+
   return (
     <div className="fixed inset-0 z-50 flex flex-col bg-gradient-to-b from-slate-800 to-slate-900 safe-area-top safe-area-bottom overscroll-none">
+      {/* Swipe down indicator */}
+      {!showQueue && (
+        <div className="absolute top-2 left-1/2 -translate-x-1/2 w-10 h-1 bg-slate-600 rounded-full" />
+      )}
+
       {/* Header */}
-      <header className="flex items-center justify-between p-4">
+      <header className="flex items-center justify-between p-4 pt-5">
         {showQueue ? (
           // Queue header - simplified with close button
           <>
@@ -348,12 +457,17 @@ export function PlayerOverlay() {
       ) : (
         // Player View
         <>
-          {/* Album Art with Flip */}
+          {/* Album Art with Flip and Swipe Gestures */}
           <div className="flex-1 flex items-center justify-center p-8">
             <div
-              onClick={handleFlip}
-              className="w-full max-w-[320px] aspect-square cursor-pointer"
-              style={{ perspective: '1000px' }}
+              {...cardSwipeHandlers}
+              onClick={!isSwiping ? handleFlip : undefined}
+              className="w-full max-w-80 aspect-square cursor-pointer select-none touch-pan-y"
+              style={{
+                perspective: '1000px',
+                transition: isSwiping ? 'none' : 'transform 0.3s ease-out, opacity 0.3s ease-out',
+                ...getCardTransform()
+              }}
             >
               <div
                 className="relative w-full h-full transition-transform duration-500"
@@ -375,6 +489,17 @@ export function PlayerOverlay() {
                     />
                   ) : (
                     <Music className="w-24 h-24 text-slate-500" />
+                  )}
+                  {/* Swipe hints */}
+                  {queue.length > 1 && (
+                    <>
+                      <div className="absolute left-2 top-1/2 -translate-y-1/2 text-slate-400/50">
+                        <SkipBack className="w-6 h-6" />
+                      </div>
+                      <div className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400/50">
+                        <SkipForward className="w-6 h-6" />
+                      </div>
+                    </>
                   )}
                   {/* Tap hint */}
                   <div className="absolute bottom-3 left-0 right-0 text-center">
