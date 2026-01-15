@@ -105,24 +105,31 @@ export function DownloadsPage() {
   };
 
   const handlePlayCachedTrack = (track: CachedTrackEntity) => {
-    play({
-      fileId: track.id,
+    // Convert all cached tracks to Track format for the queue
+    const allTracks = cachedTracks.map(t => ({
+      fileId: t.id,
       messageId: 0,
-      channelId: track.channelId || '',
-      channelName: track.channelName || '',
-      fileName: track.fileName,
+      channelId: t.channelId || '',
+      channelName: t.channelName || '',
+      fileName: t.fileName,
       filePath: '',
-      fileType: 'Audio',
-      fileSize: track.fileSize,
+      fileType: 'Audio' as const,
+      fileSize: t.fileSize,
       order: 0,
-      dateAdded: track.cachedAt.toISOString(),
+      dateAdded: t.cachedAt.toISOString(),
       isLocalFile: true,
-      streamUrl: track.streamUrl || '',
-      title: track.title || track.fileName.replace(/\.[^/.]+$/, ''),
-      artist: track.artist,
-      album: track.album,
-      duration: track.duration
-    });
+      streamUrl: t.streamUrl || '',
+      title: t.title || t.fileName.replace(/\.[^/.]+$/, ''),
+      artist: t.artist,
+      album: t.album,
+      duration: t.duration
+    }));
+
+    // Find the index of the selected track
+    const startIndex = cachedTracks.findIndex(t => t.id === track.id);
+
+    // Play the selected track with all cached tracks as the queue
+    play(allTracks[startIndex >= 0 ? startIndex : 0], allTracks, startIndex >= 0 ? startIndex : 0);
   };
 
   const handleClearFailed = async () => {
