@@ -1,12 +1,20 @@
 import { usePlayerStore } from '@/stores/playerStore';
 import { db } from '@/db/database';
 import { buildStreamUrlWithAuth, buildLocalStreamUrlWithAuth } from '@/services/api/client';
+import { cacheService } from '@/services/cache/CacheService';
+import { playbackCache } from '@/services/cache/PlaybackCacheService';
 import type { Track } from '@/types/models';
 
 class AudioPlayerService {
   private audio: HTMLAudioElement;
   private mediaSessionEnabled = 'mediaSession' in navigator;
   private currentBlobUrl: string | null = null;
+
+  // Blob of the current track once it finishes auto-caching, so seeks can
+  // switch to the local copy instead of re-downloading from the network
+  private cachedBlobForCurrentTrack: Blob | null = null;
+  private suppressAutoPlay = false;
+  private lastBufferedKey = '';
 
   // Web Audio API for visualizer (lazy initialization)
   // Uses captureStream() to analyze audio WITHOUT affecting playback quality
@@ -28,6 +36,24 @@ class AudioPlayerService {
     // Enable CORS for cross-origin audio (needed for visualizer)
     this.audio.crossOrigin = 'anonymous';
     this.setupEventListeners();
+
+    // When the background cache finishes for the playing track, keep the blob
+    // around so the next seek uses it instead of the network
+    playbackCache.onCached((trackId, blob) => {
+      const store = usePlayerStore.getState();
+      if (store.currentTrack?.fileId === trackId) {
+        this.cachedBlobForCurrentTrack = blob;
+        store.setCachedPercent(100);
+      }
+    });
+
+    // Expose background cache progress so the UI can highlight the preloaded part
+    playbackCache.onProgress((trackId, percent) => {
+      const store = usePlayerStore.getState();
+      if (store.currentTrack?.fileId === trackId) {
+        store.setCachedPercent(percent);
+      }
+    });
   }
 
   // Initialize Web Audio API for visualizer (called on user interaction)
@@ -150,6 +176,11 @@ class AudioPlayerService {
     });
 
     this.audio.addEventListener('canplay', () => {
+      if (this.suppressAutoPlay) {
+        // Source was swapped to the cached blob while paused: stay paused
+        this.suppressAutoPlay = false;
+        return;
+      }
       const currentState = store().state;
       if (currentState === 'loading' || currentState === 'buffering') {
         // Auto-play after loading
@@ -188,6 +219,7 @@ class AudioPlayerService {
 
     this.audio.addEventListener('timeupdate', () => {
       store().setPosition(this.audio.currentTime);
+      this.updateBufferedRanges();
       // Throttle MediaSession position updates to avoid issues
       // The browser extrapolates position between updates
       const now = Date.now();
@@ -195,6 +227,11 @@ class AudioPlayerService {
         this.lastPositionUpdate = now;
         this.updatePositionState();
       }
+    });
+
+    // Fired while the browser downloads the stream: keep buffered ranges fresh
+    this.audio.addEventListener('progress', () => {
+      this.updateBufferedRanges();
     });
 
     this.audio.addEventListener('waiting', () => {
@@ -332,12 +369,29 @@ class AudioPlayerService {
     this.updatePositionState();
   }
 
+  // Publish the audio element's buffered ranges to the store (skips the
+  // update when nothing changed to avoid needless re-renders)
+  private updateBufferedRanges(): void {
+    const buffered = this.audio.buffered;
+    const ranges: { start: number; end: number }[] = [];
+    for (let i = 0; i < buffered.length; i++) {
+      ranges.push({ start: buffered.start(i), end: buffered.end(i) });
+    }
+
+    const key = ranges.map(r => `${r.start.toFixed(1)}-${r.end.toFixed(1)}`).join(',');
+    if (key === this.lastBufferedKey) return;
+    this.lastBufferedKey = key;
+
+    usePlayerStore.getState().setBufferedRanges(ranges);
+  }
+
   private async getPlaybackUrl(track: Track): Promise<string> {
     // Check if track is cached in IndexedDB (for offline playback)
     try {
       const cached = await db.cachedTracks.get(track.fileId);
       if (cached?.blob) {
         console.log('Playing from cache:', track.fileName);
+        this.cachedBlobForCurrentTrack = cached.blob;
         const blobUrl = URL.createObjectURL(cached.blob);
         this.currentBlobUrl = blobUrl;
         return blobUrl;
@@ -380,9 +434,16 @@ class AudioPlayerService {
       this.audio.pause();
       this.audio.currentTime = 0;
       this.revokeBlobUrl();
+      this.cachedBlobForCurrentTrack = null;
+      this.suppressAutoPlay = false;
+      this.lastBufferedKey = '';
+      store.setBufferedRanges([]);
 
       // Get playback URL (cached blob or direct stream URL with apiKey)
       const url = await this.getPlaybackUrl(track);
+
+      // Cached tracks are fully available from the start
+      store.setCachedPercent(this.currentBlobUrl ? 100 : 0);
 
       // Set new source and play
       this.audio.src = url;
@@ -392,6 +453,15 @@ class AudioPlayerService {
 
       // Refresh visualizer connection for new track
       this.refreshVisualizer();
+
+      // Keep LRU eviction data fresh (no-op if the track isn't cached)
+      cacheService.updateLastPlayed(track.fileId).catch(() => {});
+
+      // If streaming from the network, cache the full track in the background
+      // so seeks and replays reuse the local copy
+      if (!this.currentBlobUrl) {
+        playbackCache.cacheTrackInBackground(track).catch(() => {});
+      }
     } catch (error) {
       console.error('Playback error:', error);
       store.setState('error');
@@ -432,6 +502,14 @@ class AudioPlayerService {
       if (this.audio.duration && isFinite(position) && isFinite(this.audio.duration)) {
         const newPosition = Math.max(0, Math.min(position, this.audio.duration));
         console.log('Seeking to:', newPosition, 'of', this.audio.duration);
+
+        // If the track finished caching while streaming, switch to the local
+        // blob so this (and any further) seek doesn't hit the network
+        if (this.cachedBlobForCurrentTrack && !this.audio.src.startsWith('blob:')) {
+          this.swapToCachedBlob(newPosition);
+          return;
+        }
+
         this.audio.currentTime = newPosition;
         // Reset throttle timer and update position immediately after seek
         this.lastPositionUpdate = Date.now();
@@ -440,6 +518,37 @@ class AudioPlayerService {
     } catch (error) {
       console.error('Seek error:', error);
     }
+  }
+
+  // Replace the network stream source with the cached blob, preserving
+  // position and play/pause state
+  private swapToCachedBlob(position: number): void {
+    const blob = this.cachedBlobForCurrentTrack;
+    if (!blob) return;
+
+    const wasPlaying = !this.audio.paused && !this.audio.ended;
+    console.log('Switching to cached blob for local seeking');
+
+    this.revokeBlobUrl();
+    const blobUrl = URL.createObjectURL(blob);
+    this.currentBlobUrl = blobUrl;
+    this.suppressAutoPlay = !wasPlaying;
+
+    const onLoaded = () => {
+      this.audio.removeEventListener('loadedmetadata', onLoaded);
+      this.audio.currentTime = position;
+      this.lastPositionUpdate = Date.now();
+      this.updatePositionState();
+      if (wasPlaying) {
+        this.audio.play().catch(console.error);
+      } else {
+        usePlayerStore.getState().setState('paused');
+      }
+      this.refreshVisualizer();
+    };
+    this.audio.addEventListener('loadedmetadata', onLoaded);
+    this.audio.src = blobUrl;
+    this.audio.load();
   }
 
   seekPercent(percent: number): void {
@@ -549,6 +658,11 @@ class AudioPlayerService {
     this.audio.currentTime = 0;
     this.audio.src = '';
     this.revokeBlobUrl();
+    this.cachedBlobForCurrentTrack = null;
+    playbackCache.cancel();
+    this.lastBufferedKey = '';
+    usePlayerStore.getState().setBufferedRanges([]);
+    usePlayerStore.getState().setCachedPercent(0);
     usePlayerStore.getState().setState('stopped');
     // Update MediaSession playback state
     if (this.mediaSessionEnabled) {

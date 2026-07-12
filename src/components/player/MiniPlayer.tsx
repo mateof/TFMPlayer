@@ -1,6 +1,7 @@
 import { Play, Pause, SkipForward, Music } from 'lucide-react';
 import { useAudioPlayer } from '@/hooks/useAudioPlayer';
 import { formatDuration } from '@/utils/format';
+import { getPreloadedRanges } from '@/utils/preload';
 import { useUiStore } from '@/stores/uiStore';
 import { useState, useEffect } from 'react';
 import { cacheService } from '@/services/cache/CacheService';
@@ -16,7 +17,10 @@ export function MiniPlayer() {
     isLoading,
     progress,
     togglePlayPause,
-    next
+    next,
+    seek,
+    bufferedRanges,
+    cachedPercent
   } = useAudioPlayer();
 
   // Load cover art when track changes
@@ -46,6 +50,10 @@ export function MiniPlayer() {
     next();
   };
 
+  const handleSeek = (e: React.ChangeEvent<HTMLInputElement>) => {
+    seek(parseFloat(e.target.value));
+  };
+
   const handleOpenPlayer = () => {
     setPlayerExpanded(true);
   };
@@ -55,11 +63,36 @@ export function MiniPlayer() {
       onClick={handleOpenPlayer}
       className="fixed bottom-16 left-0 right-0 bg-slate-800 border-t border-slate-700 cursor-pointer z-40 touch-manipulation"
     >
-      {/* Progress bar */}
-      <div className="h-1 bg-slate-700">
+      {/* Progress bar (seekable without opening the full player) */}
+      <div
+        className="relative h-1 bg-slate-700"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {/* Preloaded (buffered/cached) highlight */}
+        {getPreloadedRanges(bufferedRanges, cachedPercent, duration).map((range, i) => (
+          <div
+            key={i}
+            className="absolute inset-y-0 bg-slate-500 pointer-events-none"
+            style={{
+              left: `${(range.start / duration) * 100}%`,
+              width: `${((range.end - range.start) / duration) * 100}%`
+            }}
+          />
+        ))}
         <div
-          className="h-full bg-emerald-500 transition-all duration-200"
+          className="absolute inset-y-0 left-0 bg-emerald-500 transition-all duration-200 pointer-events-none"
           style={{ width: `${progress}%` }}
+        />
+        <input
+          type="range"
+          min={0}
+          max={duration || 100}
+          step="any"
+          value={position}
+          onChange={handleSeek}
+          onClick={(e) => e.stopPropagation()}
+          aria-label="Seek"
+          className="absolute left-0 right-0 -top-2 -bottom-2 h-auto w-full opacity-0 cursor-pointer touch-manipulation"
         />
       </div>
 

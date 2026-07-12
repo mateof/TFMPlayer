@@ -115,3 +115,12 @@ input[type="range"]::-moz-range-thumb {
   background: var(--color-primary);
   border: none;
 }
+
+/* Range input whose track is drawn by surrounding markup (buffered/preload bar) */
+input[type="range"].track-transparent::-webkit-slider-runnable-track {
+  background: transparent;
+}
+
+input[type="range"].track-transparent::-moz-range-track {
+  background: transparent;
+}

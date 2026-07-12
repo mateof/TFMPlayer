@@ -164,6 +164,34 @@ class CacheService {
     };
   }
 
+  // Evict least-recently-played auto-cached tracks until total size fits maxBytes.
+  // Manual downloads are never evicted. maxBytes <= 0 means unlimited.
+  async enforceCacheLimit(maxBytes: number, excludeTrackId?: string): Promise<number> {
+    if (!maxBytes || maxBytes <= 0) return 0;
+
+    let currentSize = await this.getCacheSize();
+    if (currentSize <= maxBytes) return 0;
+
+    const evictable = (await db.cachedTracks.toArray())
+      .filter(t => t.autoCached && t.id !== excludeTrackId)
+      .sort((a, b) =>
+        (a.lastPlayedAt ?? a.cachedAt).getTime() - (b.lastPlayedAt ?? b.cachedAt).getTime()
+      );
+
+    let removedCount = 0;
+    for (const track of evictable) {
+      if (currentSize <= maxBytes) break;
+      await db.cachedTracks.delete(track.id);
+      currentSize -= track.fileSize;
+      removedCount++;
+    }
+
+    if (removedCount > 0) {
+      console.log(`Cache limit: evicted ${removedCount} auto-cached tracks`);
+    }
+    return removedCount;
+  }
+
   // Remove old cached tracks to free space (LRU eviction)
   async evictOldTracks(targetSizeBytes: number): Promise<number> {
     const currentSize = await this.getCacheSize();

@@ -19,6 +19,7 @@ import {
 } from 'lucide-react';
 import { useAudioPlayer } from '@/hooks/useAudioPlayer';
 import { formatDuration, formatFileSize } from '@/utils/format';
+import { getPreloadedRanges } from '@/utils/preload';
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { PlaylistPicker } from '@/components/playlists/PlaylistPicker';
 import { useUiStore } from '@/stores/uiStore';
@@ -123,6 +124,8 @@ export function PlayerOverlay() {
     repeatMode,
     isPlaying,
     isLoading,
+    bufferedRanges,
+    cachedPercent,
     togglePlayPause,
     next,
     previous,
@@ -610,14 +613,33 @@ export function PlayerOverlay() {
 
           {/* Progress Bar */}
           <div className="px-8 mt-6">
-            <input
-              type="range"
-              min={0}
-              max={duration || 100}
-              value={position}
-              onChange={handleSeek}
-              className="w-full"
-            />
+            <div className="relative flex items-center">
+              {/* Custom track: base + preloaded highlight + played fill */}
+              <div className="absolute inset-x-0 top-1/2 -translate-y-1/2 h-1 rounded-full bg-slate-700 overflow-hidden pointer-events-none">
+                {getPreloadedRanges(bufferedRanges, cachedPercent, duration).map((range, i) => (
+                  <div
+                    key={i}
+                    className="absolute inset-y-0 bg-slate-500"
+                    style={{
+                      left: `${(range.start / duration) * 100}%`,
+                      width: `${((range.end - range.start) / duration) * 100}%`
+                    }}
+                  />
+                ))}
+                <div
+                  className="absolute inset-y-0 left-0 bg-emerald-500"
+                  style={{ width: `${duration > 0 ? (position / duration) * 100 : 0}%` }}
+                />
+              </div>
+              <input
+                type="range"
+                min={0}
+                max={duration || 100}
+                value={position}
+                onChange={handleSeek}
+                className="w-full relative track-transparent"
+              />
+            </div>
             <div className="flex justify-between mt-2 text-xs text-slate-400 tabular-nums">
               <span>{formatDuration(position)}</span>
               <span>{formatDuration(duration)}</span>

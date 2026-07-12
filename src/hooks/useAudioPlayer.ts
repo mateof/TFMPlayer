@@ -14,7 +14,9 @@ export function useAudioPlayer() {
     volume,
     shuffle,
     repeatMode,
-    error
+    error,
+    bufferedRanges,
+    cachedPercent
   } = usePlayerStore();
 
   const play = useCallback(async (track: Track, trackQueue?: Track[], startIndex?: number) => {
@@ -113,6 +115,8 @@ export function useAudioPlayer() {
     shuffle,
     repeatMode,
     error,
+    bufferedRanges,
+    cachedPercent,
 
     // Computed
     isPlaying,

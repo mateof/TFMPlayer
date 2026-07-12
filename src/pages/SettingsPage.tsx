@@ -1,11 +1,12 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Server, Key, Lock, Unlock, Trash2, HardDrive, Info } from 'lucide-react';
+import { Server, Key, Lock, Unlock, Trash2, HardDrive, Info, Zap } from 'lucide-react';
 import { Header } from '@/components/layout/Header';
 import { Button } from '@/components/common/Button';
 import { Input } from '@/components/common/Input';
 import { db, getServerConfig, saveServerConfig, clearServerConfig } from '@/db/database';
 import { apiClient } from '@/services/api/client';
+import { cacheService } from '@/services/cache/CacheService';
 import { useSettingsStore } from '@/stores/settingsStore';
 import { useUiStore } from '@/stores/uiStore';
 import { formatFileSize } from '@/utils/format';
@@ -13,7 +14,13 @@ import { APP_CONFIG } from '@/config/app';
 
 export function SettingsPage() {
   const navigate = useNavigate();
-  const { clearSettings } = useSettingsStore();
+  const {
+    clearSettings,
+    autoCacheEnabled,
+    maxCacheSizeMB,
+    setAutoCacheEnabled,
+    setMaxCacheSizeMB
+  } = useSettingsStore();
   const { addToast } = useUiStore();
 
   const [host, setHost] = useState('');
@@ -70,6 +77,18 @@ export function SettingsPage() {
       addToast('Failed to save settings', 'error');
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleMaxCacheSizeChange = async (e: React.ChangeEvent<HTMLSelectElement>) => {
+    const sizeMB = parseInt(e.target.value);
+    setMaxCacheSizeMB(sizeMB);
+
+    // Apply the new limit immediately (only auto-cached tracks are evicted)
+    const removed = await cacheService.enforceCacheLimit(sizeMB * 1024 * 1024);
+    if (removed > 0) {
+      addToast(`Removed ${removed} auto-cached tracks to fit the new limit`, 'info');
+      loadCacheSize();
     }
   };
 
@@ -186,6 +205,53 @@ export function SettingsPage() {
               <Button variant="ghost" size="sm" onClick={handleClearCache}>
                 Clear
               </Button>
+            </div>
+
+            {/* Auto-cache while streaming */}
+            <div className="flex items-center justify-between p-4 bg-slate-800 rounded-lg">
+              <div className="flex items-center gap-3">
+                <Zap className={`w-5 h-5 ${autoCacheEnabled ? 'text-emerald-400' : 'text-slate-400'}`} />
+                <div>
+                  <p className="text-sm text-white">Cache songs while streaming</p>
+                  <p className="text-xs text-slate-400">
+                    Reuse downloaded audio when seeking or replaying
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setAutoCacheEnabled(!autoCacheEnabled)}
+                className={`w-12 h-6 rounded-full transition-colors shrink-0 ${
+                  autoCacheEnabled ? 'bg-emerald-500' : 'bg-slate-600'
+                }`}
+              >
+                <div
+                  className={`w-5 h-5 bg-white rounded-full shadow transition-transform ${
+                    autoCacheEnabled ? 'translate-x-6' : 'translate-x-0.5'
+                  }`}
+                />
+              </button>
+            </div>
+
+            {/* Cache size limit */}
+            <div className="flex items-center justify-between p-4 bg-slate-800 rounded-lg">
+              <div>
+                <p className="text-sm text-white">Cache size limit</p>
+                <p className="text-xs text-slate-400">
+                  Oldest auto-cached songs are removed first. Downloads are kept.
+                </p>
+              </div>
+              <select
+                value={maxCacheSizeMB}
+                onChange={handleMaxCacheSizeChange}
+                className="bg-slate-700 text-white text-sm rounded-lg px-3 py-2 border border-slate-600 shrink-0"
+              >
+                <option value={512}>512 MB</option>
+                <option value={1024}>1 GB</option>
+                <option value={2048}>2 GB</option>
+                <option value={5120}>5 GB</option>
+                <option value={10240}>10 GB</option>
+                <option value={0}>Unlimited</option>
+              </select>
             </div>
           </div>
         </section>

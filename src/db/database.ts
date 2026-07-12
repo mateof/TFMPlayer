@@ -26,6 +26,7 @@ export interface CachedTrackEntity {
   blob: Blob;
   coverArt?: string; // Base64 data URL for album art
   metadataExtracted?: boolean; // Flag to indicate metadata has been analyzed
+  autoCached?: boolean; // Cached automatically while streaming (evictable), vs manual download
 }
 
 export interface OfflinePlaylistEntity {

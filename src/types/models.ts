@@ -147,6 +147,7 @@ export interface CachedTrack {
   cachedAt: Date;
   lastPlayedAt?: Date;
   blob: Blob;
+  autoCached?: boolean;
 }
 
 // Offline playlist

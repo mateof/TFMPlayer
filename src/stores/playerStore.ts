@@ -2,6 +2,11 @@ import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import type { Track, PlaybackState, RepeatMode } from '@/types/models';
 
+export interface BufferedRange {
+  start: number;
+  end: number;
+}
+
 interface PlayerState {
   currentTrack: Track | null;
   queue: Track[];
@@ -14,6 +19,8 @@ interface PlayerState {
   repeatMode: RepeatMode;
   error: string | null;
   showEqualizer: boolean;
+  bufferedRanges: BufferedRange[]; // Seconds buffered by the audio element
+  cachedPercent: number; // Background auto-cache download progress (0-100)
 
   // Actions
   setCurrentTrack: (track: Track | null) => void;
@@ -22,6 +29,8 @@ interface PlayerState {
   setState: (state: PlaybackState) => void;
   setPosition: (position: number) => void;
   setDuration: (duration: number) => void;
+  setBufferedRanges: (ranges: BufferedRange[]) => void;
+  setCachedPercent: (percent: number) => void;
   setVolume: (volume: number) => void;
   toggleShuffle: () => void;
   cycleRepeatMode: () => void;
@@ -53,6 +62,8 @@ export const usePlayerStore = create<PlayerState>()(
       repeatMode: 'none',
       error: null,
       showEqualizer: false,
+      bufferedRanges: [],
+      cachedPercent: 0,
 
       setCurrentTrack: (track) => set({ currentTrack: track }),
       setQueue: (queue) => set({ queue }),
@@ -60,6 +71,8 @@ export const usePlayerStore = create<PlayerState>()(
       setState: (state) => set({ state, error: state === 'error' ? get().error : null }),
       setPosition: (position) => set({ position }),
       setDuration: (duration) => set({ duration }),
+      setBufferedRanges: (ranges) => set({ bufferedRanges: ranges }),
+      setCachedPercent: (percent) => set({ cachedPercent: percent }),
       setVolume: (volume) => set({ volume }),
       toggleShuffle: () => set((s) => ({ shuffle: !s.shuffle })),
       cycleRepeatMode: () =>
