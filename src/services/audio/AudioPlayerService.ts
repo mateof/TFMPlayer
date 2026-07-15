@@ -3,7 +3,11 @@ import { db } from '@/db/database';
 import { buildStreamUrlWithAuth, buildLocalStreamUrlWithAuth } from '@/services/api/client';
 import { cacheService } from '@/services/cache/CacheService';
 import { playbackCache } from '@/services/cache/PlaybackCacheService';
+import { loadNextQueuePage } from '@/services/queue/QueueSourceService';
 import type { Track } from '@/types/models';
+
+// When this many (or fewer) tracks remain after the current one, page in more
+const QUEUE_PREFETCH_THRESHOLD = 10;
 
 class AudioPlayerService {
   private audio: HTMLAudioElement;
@@ -461,6 +465,14 @@ class AudioPlayerService {
       // so seeks and replays reuse the local copy
       if (!this.currentBlobUrl) {
         playbackCache.cacheTrackInBackground(track).catch(() => {});
+      }
+
+      // If the queue comes from a paginated source and we're near its end,
+      // load the next page so the upcoming tracks are known
+      const { queue: currentQueue, currentIndex, queueSource } = usePlayerStore.getState();
+      if (queueSource?.hasMore &&
+          currentQueue.length - 1 - currentIndex <= QUEUE_PREFETCH_THRESHOLD) {
+        loadNextQueuePage().catch((e) => console.warn('Queue prefetch failed:', e));
       }
     } catch (error) {
       console.error('Playback error:', error);

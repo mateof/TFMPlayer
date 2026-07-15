@@ -7,6 +7,22 @@ export interface BufferedRange {
   end: number;
 }
 
+// Where the current queue came from, so more tracks can be paged in on demand.
+// Captures the channel view (folder, filters, sort, search) and pagination state.
+export interface QueueSource {
+  type: 'channel';
+  channelId: string;
+  channelName: string;
+  folderId?: string;
+  filterMode: string;
+  search?: string;
+  sortBy: string;
+  sortDesc: boolean;
+  nextPage: number;
+  pageSize: number;
+  hasMore: boolean;
+}
+
 interface PlayerState {
   currentTrack: Track | null;
   queue: Track[];
@@ -21,6 +37,7 @@ interface PlayerState {
   showEqualizer: boolean;
   bufferedRanges: BufferedRange[]; // Seconds buffered by the audio element
   cachedPercent: number; // Background auto-cache download progress (0-100)
+  queueSource: QueueSource | null; // Paginated origin of the queue (null = static queue)
 
   // Actions
   setCurrentTrack: (track: Track | null) => void;
@@ -31,6 +48,7 @@ interface PlayerState {
   setDuration: (duration: number) => void;
   setBufferedRanges: (ranges: BufferedRange[]) => void;
   setCachedPercent: (percent: number) => void;
+  setQueueSource: (source: QueueSource | null) => void;
   setVolume: (volume: number) => void;
   toggleShuffle: () => void;
   cycleRepeatMode: () => void;
@@ -64,15 +82,19 @@ export const usePlayerStore = create<PlayerState>()(
       showEqualizer: false,
       bufferedRanges: [],
       cachedPercent: 0,
+      queueSource: null,
 
       setCurrentTrack: (track) => set({ currentTrack: track }),
-      setQueue: (queue) => set({ queue }),
+      // Replacing the queue invalidates any previous paginated source; the new
+      // source (if any) is set explicitly by the page that started playback
+      setQueue: (queue) => set({ queue, queueSource: null }),
       setCurrentIndex: (index) => set({ currentIndex: index }),
       setState: (state) => set({ state, error: state === 'error' ? get().error : null }),
       setPosition: (position) => set({ position }),
       setDuration: (duration) => set({ duration }),
       setBufferedRanges: (ranges) => set({ bufferedRanges: ranges }),
       setCachedPercent: (percent) => set({ cachedPercent: percent }),
+      setQueueSource: (source) => set({ queueSource: source }),
       setVolume: (volume) => set({ volume }),
       toggleShuffle: () => set((s) => ({ shuffle: !s.shuffle })),
       cycleRepeatMode: () =>
@@ -105,7 +127,7 @@ export const usePlayerStore = create<PlayerState>()(
           }
           return { queue: newQueue, currentIndex: newIndex };
         }),
-      clearQueue: () => set({ queue: [], currentIndex: 0, currentTrack: null }),
+      clearQueue: () => set({ queue: [], currentIndex: 0, currentTrack: null, queueSource: null }),
       moveInQueue: (fromIndex, toIndex) =>
         set((s) => {
           const newQueue = [...s.queue];

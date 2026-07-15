@@ -9,8 +9,9 @@ import { channelsApi } from '@/services/api/channels.api';
 import { useAudioPlayer } from '@/hooks/useAudioPlayer';
 import { useDebounce } from '@/hooks/useDebounce';
 import { useUiStore } from '@/stores/uiStore';
+import { usePlayerStore } from '@/stores/playerStore';
 import { formatFileSize } from '@/utils/format';
-import { buildStreamUrlSync } from '@/services/api/client';
+import { fileToTrack, filterFilesByExtension, getApiFilter } from '@/utils/channelTracks';
 import { downloadManager, useDownloadStore } from '@/services/download/DownloadManager';
 import { cacheService } from '@/services/cache/CacheService';
 import type { ChannelDetail, ChannelFile, Track } from '@/types/models';
@@ -24,25 +25,6 @@ const categoryIcons: Record<string, React.ReactNode> = {
   Audio: <Music className="w-5 h-5" />,
   Folder: <Folder className="w-5 h-5" />
 };
-
-// Convert ChannelFile to Track
-function fileToTrack(file: ChannelFile, channelId: string, channelName: string): Track {
-  return {
-    fileId: file.id,
-    messageId: file.messageId,
-    channelId: channelId,
-    channelName: channelName,
-    fileName: file.name,
-    filePath: file.path,
-    fileType: file.type,
-    fileSize: file.size,
-    order: 0,
-    dateAdded: file.dateCreated,
-    isLocalFile: false,
-    streamUrl: file.streamUrl || buildStreamUrlSync(channelId, file.id, file.name),
-    title: file.name.replace(/\.[^/.]+$/, '')
-  };
-}
 
 interface FolderBreadcrumb {
   id: string;
@@ -264,28 +246,6 @@ export function ChannelDetailPage() {
     }
   };
 
-  // Audio extensions for client-side filtering
-  const audioExtensions = ['mp3', 'flac', 'wav', 'ogg', 'opus', 'aac', 'm4a', 'wma', 'ape'];
-  const isExtensionFilter = audioExtensions.includes(filterMode);
-
-  // Get the API filter value (send 'audio' for extension filters)
-  const getApiFilter = (): string | undefined => {
-    if (filterMode === 'audio_folders') return 'audio_folders';
-    if (filterMode === 'audio' || isExtensionFilter) return 'audio';
-    return 'audio_folders'; // Default to audio + folders
-  };
-
-  // Filter files by extension on the client side
-  const filterByExtension = (files: ChannelFile[]): ChannelFile[] => {
-    if (!isExtensionFilter) return files;
-
-    const ext = `.${filterMode.toLowerCase()}`;
-    return files.filter(f =>
-      f.category === 'Folder' ||
-      f.name.toLowerCase().endsWith(ext)
-    );
-  };
-
   // Files are sorted by the server - no client-side sorting needed
   // When sortBy/sortDesc changes, we reload from page 1 with new sort params
 
@@ -306,7 +266,7 @@ export function ChannelDetailPage() {
         {
           page,
           pageSize: PAGE_SIZE,
-          filter: getApiFilter(),
+          filter: getApiFilter(filterMode),
           search: searchText || undefined,
           sortBy,
           sortDesc
@@ -314,7 +274,7 @@ export function ChannelDetailPage() {
       );
 
       // Apply client-side extension filtering (sorting is done via useMemo)
-      const filteredData = filterByExtension(data);
+      const filteredData = filterFilesByExtension(data, filterMode);
 
       if (reset) {
         setFiles(filteredData);
@@ -452,6 +412,24 @@ export function ChannelDetailPage() {
     setSearchParams(params);
   };
 
+  // Register where the queue came from so the player can page in more tracks
+  // (queue infinite scroll + auto-load when nearing the end)
+  const registerQueueSource = () => {
+    usePlayerStore.getState().setQueueSource({
+      type: 'channel',
+      channelId: id!,
+      channelName: channel?.name || '',
+      folderId: currentFolderId,
+      filterMode,
+      search: searchText || undefined,
+      sortBy,
+      sortDesc,
+      nextPage: currentPage + 1,
+      pageSize: PAGE_SIZE,
+      hasMore
+    });
+  };
+
   const playAudioFile = (file: ChannelFile) => {
     if (!channel) return;
 
@@ -461,6 +439,7 @@ export function ChannelDetailPage() {
 
     const track = fileToTrack(file, id!, channel.name);
     play(track, tracks, startIndex >= 0 ? startIndex : 0);
+    registerQueueSource();
   };
 
   const playAllAudio = () => {
@@ -472,6 +451,7 @@ export function ChannelDetailPage() {
     }
     const tracks = audioFiles.map(f => fileToTrack(f, id!, channel.name));
     play(tracks[0], tracks, 0);
+    registerQueueSource();
   };
 
   const handleAddToPlaylist = (file: ChannelFile, e: React.MouseEvent) => {

@@ -27,6 +27,7 @@ import { usePlayerStore } from '@/stores/playerStore';
 import { audioMetadataService, type AudioMetadata } from '@/services/audio/AudioMetadataService';
 import { audioPlayer } from '@/services/audio/AudioPlayerService';
 import { cacheService } from '@/services/cache/CacheService';
+import { loadNextQueuePage } from '@/services/queue/QueueSourceService';
 import { AudioEqualizer } from './AudioEqualizer';
 
 // Swipe gesture hook
@@ -103,7 +104,9 @@ export function PlayerOverlay() {
   const showEqualizer = usePlayerStore((s) => s.showEqualizer);
   const toggleEqualizer = usePlayerStore((s) => s.toggleEqualizer);
   const moveInQueue = usePlayerStore((s) => s.moveInQueue);
+  const queueSource = usePlayerStore((s) => s.queueSource);
   const [showQueue, setShowQueue] = useState(false);
+  const [loadingMoreQueue, setLoadingMoreQueue] = useState(false);
   const [showPlaylistPicker, setShowPlaylistPicker] = useState(false);
   const [isFlipped, setIsFlipped] = useState(false);
   const [metadata, setMetadata] = useState<AudioMetadata | null>(null);
@@ -162,6 +165,24 @@ export function PlayerOverlay() {
 
   const handleVolumeChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setVolume(parseFloat(e.target.value));
+  };
+
+  // Infinite scroll in the queue: page in more tracks from the queue's source
+  const handleQueueScroll = async (e: React.UIEvent<HTMLDivElement>) => {
+    const el = e.currentTarget;
+    if (!queueSource?.hasMore || loadingMoreQueue) return;
+
+    const threshold = 200; // px from bottom
+    if (el.scrollHeight - el.scrollTop - el.clientHeight < threshold) {
+      setLoadingMoreQueue(true);
+      try {
+        await loadNextQueuePage();
+      } catch (error) {
+        console.warn('Failed to load more queue tracks:', error);
+      } finally {
+        setLoadingMoreQueue(false);
+      }
+    }
   };
 
   const toggleMute = () => {
@@ -394,6 +415,7 @@ export function PlayerOverlay() {
         // Queue View - overscroll-none prevents pull-to-refresh
         <div
           ref={queueListRef}
+          onScroll={handleQueueScroll}
           className="flex-1 overflow-y-auto px-4 overscroll-none"
         >
           <div className="space-y-2 pb-4">
@@ -457,6 +479,19 @@ export function PlayerOverlay() {
                 )}
               </div>
             ))}
+
+            {/* Infinite scroll: more tracks available from the channel */}
+            {loadingMoreQueue && (
+              <div className="flex items-center justify-center py-3 gap-2 text-slate-400">
+                <Loader2 className="w-4 h-4 animate-spin" />
+                <span className="text-xs">Loading more...</span>
+              </div>
+            )}
+            {!loadingMoreQueue && queueSource?.hasMore && (
+              <p className="py-3 text-center text-xs text-slate-500">
+                Scroll down to load more from {queueSource.channelName}
+              </p>
+            )}
           </div>
         </div>
       ) : (
