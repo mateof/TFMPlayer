@@ -144,6 +144,24 @@ export function PlayerOverlay() {
     setPlayerExpanded(false);
   };
 
+  // Disable the browser's pull-to-refresh while the player is expanded.
+  // Chrome decides PTR at gesture start, before our touchmove preventDefault
+  // can run, so the drag-to-dismiss below can lose that race on the first
+  // gesture. overscroll-behavior on the root scroller removes PTR entirely
+  // without affecting inner scrolling (queue, metadata).
+  useEffect(() => {
+    const html = document.documentElement;
+    const body = document.body;
+    const prevHtml = html.style.overscrollBehaviorY;
+    const prevBody = body.style.overscrollBehaviorY;
+    html.style.overscrollBehaviorY = 'none';
+    body.style.overscrollBehaviorY = 'none';
+    return () => {
+      html.style.overscrollBehaviorY = prevHtml;
+      body.style.overscrollBehaviorY = prevBody;
+    };
+  }, []);
+
   // Drag-down anywhere on the overlay to collapse it. Native non-passive
   // listeners so preventDefault() can block the browser's pull-to-refresh
   // (React's synthetic touch events can't). Scrollable areas and sliders
