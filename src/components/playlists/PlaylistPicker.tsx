@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { isAxiosError } from 'axios';
 import { X, Plus, Music, Check, CloudOff } from 'lucide-react';
 import { Button } from '@/components/common/Button';
 import { Input } from '@/components/common/Input';
@@ -69,8 +70,13 @@ export function PlaylistPicker({ track, onClose }: PlaylistPickerProps) {
       }
       onClose();
     } catch (error) {
-      addToast('Failed to add track', 'error');
-      console.error(error);
+      // Server returns 409 Conflict when the track is already in the playlist
+      if (isAxiosError(error) && error.response?.status === 409) {
+        addToast('This track is already in that playlist', 'info');
+      } else {
+        addToast('Failed to add track', 'error');
+        console.error(error);
+      }
     } finally {
       setAddingTo(null);
     }
