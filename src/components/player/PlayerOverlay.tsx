@@ -144,6 +144,85 @@ export function PlayerOverlay() {
     setPlayerExpanded(false);
   };
 
+  // Drag-down anywhere on the overlay to collapse it. Native non-passive
+  // listeners so preventDefault() can block the browser's pull-to-refresh
+  // (React's synthetic touch events can't). Scrollable areas and sliders
+  // are exempt via [data-no-dismiss] / input[type=range].
+  const overlayRef = useRef<HTMLDivElement>(null);
+  const [dismissDragY, setDismissDragY] = useState(0);
+  const [dismissDragging, setDismissDragging] = useState(false);
+
+  useEffect(() => {
+    const el = overlayRef.current;
+    if (!el) return;
+
+    let startX = 0;
+    let startY = 0;
+    let currentY = 0;
+    let mode: 'none' | 'pending' | 'drag' = 'none';
+
+    const isExempt = (target: EventTarget | null) =>
+      !!(target as HTMLElement | null)?.closest('input[type="range"], [data-no-dismiss]');
+
+    const onTouchStart = (e: TouchEvent) => {
+      if (e.touches.length !== 1 || isExempt(e.target)) {
+        mode = 'none';
+        return;
+      }
+      startX = e.touches[0].clientX;
+      startY = e.touches[0].clientY;
+      currentY = 0;
+      mode = 'pending';
+    };
+
+    const onTouchMove = (e: TouchEvent) => {
+      if (mode === 'none') return;
+      const deltaX = e.touches[0].clientX - startX;
+      const deltaY = e.touches[0].clientY - startY;
+
+      if (mode === 'pending') {
+        if (Math.abs(deltaX) < 12 && Math.abs(deltaY) < 12) return;
+        // Only capture clearly-downward drags; leave horizontal swipes
+        // (next/previous on the album art) untouched
+        if (deltaY > 0 && deltaY > Math.abs(deltaX) * 1.2) {
+          mode = 'drag';
+          setDismissDragging(true);
+        } else {
+          mode = 'none';
+          return;
+        }
+      }
+
+      // Dragging the sheet: stop pull-to-refresh and follow the finger
+      e.preventDefault();
+      currentY = Math.max(0, deltaY);
+      setDismissDragY(currentY);
+    };
+
+    const finish = () => {
+      if (mode === 'drag') {
+        setDismissDragging(false);
+        if (currentY > 120) {
+          setPlayerExpanded(false);
+        } else {
+          setDismissDragY(0);
+        }
+      }
+      mode = 'none';
+    };
+
+    el.addEventListener('touchstart', onTouchStart, { passive: true });
+    el.addEventListener('touchmove', onTouchMove, { passive: false });
+    el.addEventListener('touchend', finish);
+    el.addEventListener('touchcancel', finish);
+    return () => {
+      el.removeEventListener('touchstart', onTouchStart);
+      el.removeEventListener('touchmove', onTouchMove);
+      el.removeEventListener('touchend', finish);
+      el.removeEventListener('touchcancel', finish);
+    };
+  }, [setPlayerExpanded, currentTrack]);
+
   if (!currentTrack) {
     return (
       <div className="fixed inset-0 z-50 flex flex-col items-center justify-center p-6 bg-slate-900">
@@ -309,7 +388,8 @@ export function PlayerOverlay() {
     setIsFlipped(!isFlipped);
   };
 
-  // Swipe gestures for album art card
+  // Swipe gestures for album art card (horizontal only: next/previous).
+  // Downward drags are handled by the overlay-wide dismiss gesture.
   const { handlers: cardSwipeHandlers, touchDelta, isSwiping, swipeDirection } = useSwipeGesture({
     onSwipeLeft: () => {
       if (queue.length > 1) next();
@@ -318,9 +398,7 @@ export function PlayerOverlay() {
       // Use skipToPrevious to always go to previous track (not restart current)
       if (queue.length > 1) skipToPrevious();
     },
-    onSwipeDown: handleClose,
-    threshold: 80,
-    verticalThreshold: 120
+    threshold: 80
   });
 
   // Calculate card transform based on swipe
@@ -334,19 +412,21 @@ export function PlayerOverlay() {
         transform: `translateX(${touchDelta.x}px) rotate(${rotation}deg)`,
         opacity: Math.max(0.5, opacity)
       };
-    } else if (swipeDirection === 'vertical' && touchDelta.y > 0) {
-      const scale = 1 - touchDelta.y / 1000;
-      const opacity = 1 - touchDelta.y / 300;
-      return {
-        transform: `translateY(${touchDelta.y}px) scale(${Math.max(0.8, scale)})`,
-        opacity: Math.max(0.5, opacity)
-      };
     }
+    // Vertical drags are handled by the overlay-wide dismiss gesture
     return {};
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex flex-col bg-gradient-to-b from-slate-800 to-slate-900 safe-area-top safe-area-bottom overscroll-none">
+    <div
+      ref={overlayRef}
+      className="fixed inset-0 z-50 flex flex-col bg-gradient-to-b from-slate-800 to-slate-900 safe-area-top safe-area-bottom overscroll-none"
+      style={{
+        transform: dismissDragY > 0 ? `translateY(${dismissDragY}px)` : undefined,
+        opacity: dismissDragY > 0 ? Math.max(0.6, 1 - dismissDragY / 600) : undefined,
+        transition: dismissDragging ? 'none' : 'transform 0.2s ease-out, opacity 0.2s ease-out'
+      }}
+    >
       {/* Swipe down indicator */}
       {!showQueue && (
         <div className="absolute top-2 left-1/2 -translate-x-1/2 w-10 h-1 bg-slate-600 rounded-full" />
@@ -416,6 +496,7 @@ export function PlayerOverlay() {
         <div
           ref={queueListRef}
           onScroll={handleQueueScroll}
+          data-no-dismiss
           className="flex-1 overflow-y-auto px-4 overscroll-none"
         >
           <div className="space-y-2 pb-4">
@@ -566,7 +647,7 @@ export function PlayerOverlay() {
                       <p className="text-slate-400 text-sm mt-2">Loading metadata...</p>
                     </div>
                   ) : metadata ? (
-                    <div className="space-y-3 text-sm p-5 overflow-y-auto h-full">
+                    <div data-no-dismiss className="space-y-3 text-sm p-5 overflow-y-auto h-full">
                       <h3 className="text-emerald-400 font-semibold text-base mb-4">Track Info</h3>
 
                       {/* Tags section */}
