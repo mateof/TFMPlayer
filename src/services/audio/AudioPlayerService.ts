@@ -17,8 +17,18 @@ class AudioPlayerService {
   // Blob of the current track once it finishes auto-caching, so seeks can
   // switch to the local copy instead of re-downloading from the network
   private cachedBlobForCurrentTrack: Blob | null = null;
-  private suppressAutoPlay = false;
   private lastBufferedKey = '';
+
+  // Explicit playback intent. True whenever playback should be running
+  // (track started, auto-advance, resume) and false when the user paused.
+  // canplay/visibilitychange re-issue play() while this is true, so a
+  // rejected autoplay (background tab, autoplay policy, races) self-heals
+  // instead of leaving the next track loaded but paused.
+  private pendingAutoPlay = false;
+
+  // Listener added by swapToCachedBlob; tracked so an interrupted swap
+  // can't fire its stale callback on the next track's load
+  private swapLoadedListener: (() => void) | null = null;
 
   // Web Audio API for visualizer (lazy initialization)
   // Uses captureStream() to analyze audio WITHOUT affecting playback quality
@@ -180,14 +190,16 @@ class AudioPlayerService {
     });
 
     this.audio.addEventListener('canplay', () => {
-      if (this.suppressAutoPlay) {
-        // Source was swapped to the cached blob while paused: stay paused
-        this.suppressAutoPlay = false;
-        return;
+      // Start/resume playback whenever it should be running but isn't
+      if (this.pendingAutoPlay && this.audio.paused) {
+        this.audio.play().catch(console.error);
       }
-      const currentState = store().state;
-      if (currentState === 'loading' || currentState === 'buffering') {
-        // Auto-play after loading
+    });
+
+    // If autoplay was blocked while the tab was hidden (e.g. auto-advance
+    // with the screen off), retry as soon as the tab becomes visible
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden && this.pendingAutoPlay && this.audio.paused && this.audio.src) {
         this.audio.play().catch(console.error);
       }
     });
@@ -243,6 +255,7 @@ class AudioPlayerService {
     });
 
     this.audio.addEventListener('playing', () => {
+      this.pendingAutoPlay = false;
       store().setState('playing');
     });
 
@@ -438,8 +451,8 @@ class AudioPlayerService {
       this.audio.pause();
       this.audio.currentTime = 0;
       this.revokeBlobUrl();
+      this.clearSwapLoadedListener();
       this.cachedBlobForCurrentTrack = null;
-      this.suppressAutoPlay = false;
       this.lastBufferedKey = '';
       store.setBufferedRanges([]);
 
@@ -449,11 +462,23 @@ class AudioPlayerService {
       // Cached tracks are fully available from the start
       store.setCachedPercent(this.currentBlobUrl ? 100 : 0);
 
-      // Set new source and play
+      // Set new source and play. pendingAutoPlay makes canplay/visibility
+      // retry the play() if this first attempt is rejected (autoplay policy,
+      // background tab) so auto-advance never leaves the track paused.
+      this.pendingAutoPlay = true;
       this.audio.src = url;
       this.audio.volume = store.volume;
 
-      await this.audio.play();
+      try {
+        await this.audio.play();
+      } catch (playError) {
+        if (playError instanceof DOMException && playError.name === 'NotAllowedError') {
+          // Autoplay blocked: keep the intent, the retry hooks will resume
+          console.warn('Autoplay blocked, will retry on canplay/visibility');
+        } else {
+          throw playError;
+        }
+      }
 
       // Refresh visualizer connection for new track
       this.refreshVisualizer();
@@ -492,19 +517,23 @@ class AudioPlayerService {
   }
 
   pause(): void {
+    this.pendingAutoPlay = false;
     this.audio.pause();
   }
 
   resume(): void {
     if (this.audio.src) {
+      this.pendingAutoPlay = true;
       this.audio.play().catch(console.error);
     }
   }
 
   async togglePlayPause(): Promise<void> {
     if (this.audio.paused) {
+      this.pendingAutoPlay = true;
       await this.audio.play();
     } else {
+      this.pendingAutoPlay = false;
       this.audio.pause();
     }
   }
@@ -532,6 +561,13 @@ class AudioPlayerService {
     }
   }
 
+  private clearSwapLoadedListener(): void {
+    if (this.swapLoadedListener) {
+      this.audio.removeEventListener('loadedmetadata', this.swapLoadedListener);
+      this.swapLoadedListener = null;
+    }
+  }
+
   // Replace the network stream source with the cached blob, preserving
   // position and play/pause state
   private swapToCachedBlob(position: number): void {
@@ -542,12 +578,13 @@ class AudioPlayerService {
     console.log('Switching to cached blob for local seeking');
 
     this.revokeBlobUrl();
+    this.clearSwapLoadedListener();
     const blobUrl = URL.createObjectURL(blob);
     this.currentBlobUrl = blobUrl;
-    this.suppressAutoPlay = !wasPlaying;
+    this.pendingAutoPlay = wasPlaying;
 
     const onLoaded = () => {
-      this.audio.removeEventListener('loadedmetadata', onLoaded);
+      this.clearSwapLoadedListener();
       this.audio.currentTime = position;
       this.lastPositionUpdate = Date.now();
       this.updatePositionState();
@@ -558,6 +595,7 @@ class AudioPlayerService {
       }
       this.refreshVisualizer();
     };
+    this.swapLoadedListener = onLoaded;
     this.audio.addEventListener('loadedmetadata', onLoaded);
     this.audio.src = blobUrl;
     this.audio.load();
@@ -656,9 +694,11 @@ class AudioPlayerService {
     const { repeatMode } = usePlayerStore.getState();
 
     if (repeatMode === 'one') {
-      // Repeat current track
+      // Repeat current track. Intent set after seek(0): a seek at 'ended'
+      // can swap to the cached blob, which would overwrite it with "paused"
       this.seek(0);
-      await this.audio.play();
+      this.pendingAutoPlay = true;
+      await this.audio.play().catch(console.error);
     } else {
       // Go to next track
       await this.next();
@@ -671,6 +711,8 @@ class AudioPlayerService {
     this.audio.src = '';
     this.revokeBlobUrl();
     this.cachedBlobForCurrentTrack = null;
+    this.pendingAutoPlay = false;
+    this.clearSwapLoadedListener();
     playbackCache.cancel();
     this.lastBufferedKey = '';
     usePlayerStore.getState().setBufferedRanges([]);
