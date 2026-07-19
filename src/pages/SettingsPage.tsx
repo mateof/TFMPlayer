@@ -1,13 +1,15 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Server, Key, Lock, Unlock, Trash2, HardDrive, Info, Zap } from 'lucide-react';
+import { Server, Key, Lock, Unlock, Trash2, HardDrive, Info, Zap, Music2 } from 'lucide-react';
 import { Header } from '@/components/layout/Header';
 import { Button } from '@/components/common/Button';
 import { Input } from '@/components/common/Input';
 import { db, getServerConfig, saveServerConfig, clearServerConfig } from '@/db/database';
 import { apiClient } from '@/services/api/client';
 import { cacheService } from '@/services/cache/CacheService';
-import { useSettingsStore } from '@/stores/settingsStore';
+import { audioPlayer } from '@/services/audio/AudioPlayerService';
+import { useSettingsStore, type SoundEnhancementSettings } from '@/stores/settingsStore';
+import { EQ_BAND_LABELS, EQ_PRESETS } from '@/utils/eqPresets';
 import { useUiStore } from '@/stores/uiStore';
 import { formatFileSize } from '@/utils/format';
 import { APP_CONFIG } from '@/config/app';
@@ -19,8 +21,22 @@ export function SettingsPage() {
     autoCacheEnabled,
     maxCacheSizeMB,
     setAutoCacheEnabled,
-    setMaxCacheSizeMB
+    setMaxCacheSizeMB,
+    sound,
+    setSound
   } = useSettingsStore();
+
+  // Update the store and apply the DSP settings live
+  const updateSound = (partial: Partial<SoundEnhancementSettings>) => {
+    setSound(partial);
+    audioPlayer.applySoundSettings({ ...sound, ...partial });
+  };
+
+  const handleEqBandChange = (index: number, value: number) => {
+    const eqGains = [...sound.eqGains];
+    eqGains[index] = value;
+    updateSound({ eqGains, preset: 'custom' });
+  };
   const { addToast } = useUiStore();
 
   const [host, setHost] = useState('');
@@ -253,6 +269,149 @@ export function SettingsPage() {
                 <option value={0}>Unlimited</option>
               </select>
             </div>
+          </div>
+        </section>
+
+        <div className="h-px bg-slate-700 mx-4" />
+
+        {/* Sound Enhancement */}
+        <section className="p-4">
+          <h2 className="text-sm font-medium text-slate-400 uppercase mb-4">
+            Sound
+          </h2>
+          <div className="space-y-3">
+            {/* Master toggle */}
+            <div className="flex items-center justify-between p-4 bg-slate-800 rounded-lg">
+              <div className="flex items-center gap-3">
+                <Music2 className={`w-5 h-5 ${sound.enabled ? 'text-emerald-400' : 'text-slate-400'}`} />
+                <div>
+                  <p className="text-sm text-white">Sound enhancement</p>
+                  <p className="text-xs text-slate-400">
+                    Equalizer, bass boost, 3D stereo and volume leveling
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => updateSound({ enabled: !sound.enabled })}
+                className={`w-12 h-6 rounded-full transition-colors shrink-0 ${
+                  sound.enabled ? 'bg-emerald-500' : 'bg-slate-600'
+                }`}
+              >
+                <div
+                  className={`w-5 h-5 bg-white rounded-full shadow transition-transform ${
+                    sound.enabled ? 'translate-x-6' : 'translate-x-0.5'
+                  }`}
+                />
+              </button>
+            </div>
+
+            {sound.enabled && (
+              <>
+                {/* EQ presets */}
+                <div className="p-4 bg-slate-800 rounded-lg">
+                  <p className="text-xs text-slate-400 mb-2">Equalizer preset</p>
+                  <div className="flex flex-wrap gap-2">
+                    {EQ_PRESETS.map((preset) => (
+                      <button
+                        key={preset.key}
+                        onClick={() => updateSound({ preset: preset.key, eqGains: [...preset.gains] })}
+                        className={`px-3 py-1 text-sm rounded-full transition-colors ${
+                          sound.preset === preset.key
+                            ? 'bg-emerald-500 text-white'
+                            : 'bg-slate-700 text-slate-300'
+                        }`}
+                      >
+                        {preset.label}
+                      </button>
+                    ))}
+                    {sound.preset === 'custom' && (
+                      <span className="px-3 py-1 text-sm rounded-full bg-emerald-500/20 text-emerald-400">
+                        Custom
+                      </span>
+                    )}
+                  </div>
+
+                  {/* EQ bands */}
+                  <div className="mt-4 space-y-1.5">
+                    {EQ_BAND_LABELS.map((label, i) => (
+                      <div key={label} className="flex items-center gap-3">
+                        <span className="w-8 text-right text-[11px] text-slate-400 tabular-nums">
+                          {label}
+                        </span>
+                        <input
+                          type="range"
+                          min={-12}
+                          max={12}
+                          step={1}
+                          value={sound.eqGains[i] ?? 0}
+                          onChange={(e) => handleEqBandChange(i, parseInt(e.target.value))}
+                          className="flex-1"
+                        />
+                        <span className="w-10 text-[11px] text-slate-400 tabular-nums">
+                          {(sound.eqGains[i] ?? 0) > 0 ? '+' : ''}{sound.eqGains[i] ?? 0} dB
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Bass boost */}
+                <div className="p-4 bg-slate-800 rounded-lg">
+                  <div className="flex items-center justify-between mb-2">
+                    <p className="text-sm text-white">Bass boost</p>
+                    <span className="text-xs text-slate-400 tabular-nums">+{sound.bassBoost} dB</span>
+                  </div>
+                  <input
+                    type="range"
+                    min={0}
+                    max={10}
+                    step={1}
+                    value={sound.bassBoost}
+                    onChange={(e) => updateSound({ bassBoost: parseInt(e.target.value) })}
+                    className="w-full"
+                  />
+                </div>
+
+                {/* Stereo width */}
+                <div className="p-4 bg-slate-800 rounded-lg">
+                  <div className="flex items-center justify-between mb-2">
+                    <p className="text-sm text-white">3D stereo width</p>
+                    <span className="text-xs text-slate-400 tabular-nums">+{sound.stereoWidth}%</span>
+                  </div>
+                  <input
+                    type="range"
+                    min={0}
+                    max={100}
+                    step={5}
+                    value={sound.stereoWidth}
+                    onChange={(e) => updateSound({ stereoWidth: parseInt(e.target.value) })}
+                    className="w-full"
+                  />
+                </div>
+
+                {/* Loudness */}
+                <div className="flex items-center justify-between p-4 bg-slate-800 rounded-lg">
+                  <div>
+                    <p className="text-sm text-white">Volume leveling</p>
+                    <p className="text-xs text-slate-400">
+                      Evens out loudness differences between tracks
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => updateSound({ loudness: !sound.loudness })}
+                    className={`w-12 h-6 rounded-full transition-colors shrink-0 ${
+                      sound.loudness ? 'bg-emerald-500' : 'bg-slate-600'
+                    }`}
+                  >
+                    <div
+                      className={`w-5 h-5 bg-white rounded-full shadow transition-transform ${
+                        sound.loudness ? 'translate-x-6' : 'translate-x-0.5'
+                      }`}
+                    />
+                  </button>
+                </div>
+              </>
+            )}
           </div>
         </section>
 

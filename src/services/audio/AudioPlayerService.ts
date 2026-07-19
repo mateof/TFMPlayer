@@ -4,6 +4,8 @@ import { buildStreamUrlWithAuth, buildLocalStreamUrlWithAuth } from '@/services/
 import { cacheService } from '@/services/cache/CacheService';
 import { playbackCache } from '@/services/cache/PlaybackCacheService';
 import { loadNextQueuePage } from '@/services/queue/QueueSourceService';
+import { useSettingsStore, type SoundEnhancementSettings } from '@/stores/settingsStore';
+import { EQ_BANDS } from '@/utils/eqPresets';
 import type { Track } from '@/types/models';
 
 // When this many (or fewer) tracks remain after the current one, page in more
@@ -36,6 +38,19 @@ class AudioPlayerService {
   private analyserNode: AnalyserNode | null = null;
   private streamSourceNode: MediaStreamAudioSourceNode | null = null;
   private visualizerInitialized = false;
+
+  // Sound enhancement DSP chain (Web Audio). Once createMediaElementSource
+  // is called the element's audio ALWAYS flows through the AudioContext, so
+  // the graph is built lazily on first enable and bypassed when disabled.
+  private mediaSource: MediaElementAudioSourceNode | null = null;
+  private chainInput: GainNode | null = null;
+  private chainOutput: GainNode | null = null;
+  private eqFilters: BiquadFilterNode[] = [];
+  private bassFilter: BiquadFilterNode | null = null;
+  private sideGain: GainNode | null = null;
+  private compressor: DynamicsCompressorNode | null = null;
+  private makeupGain: GainNode | null = null;
+  private dspEnabled = false;
 
   // Cover art for MediaSession
   private currentCoverArt: string | null = null;
@@ -81,8 +96,8 @@ class AudioPlayerService {
     }
 
     try {
-      // Create audio context
-      this.audioContext = new AudioContext();
+      // Create (or reuse) the audio context shared with the DSP chain
+      this.audioContext = this.ensureAudioContext();
 
       // Create analyser with good settings for visualization
       this.analyserNode = this.audioContext.createAnalyser();
@@ -108,6 +123,13 @@ class AudioPlayerService {
   // This creates a copy of the audio for analysis without affecting playback
   private connectVisualizerStream(): void {
     if (!this.audioContext || !this.analyserNode) return;
+
+    // With the DSP graph active, the element no longer outputs through
+    // captureStream: feed the analyser directly from the graph instead
+    if (this.mediaSource) {
+      this.applyDspRouting(this.dspEnabled);
+      return;
+    }
 
     try {
       // Disconnect previous source if any
@@ -164,6 +186,143 @@ class AudioPlayerService {
       URL.revokeObjectURL(this.currentBlobUrl);
       this.currentBlobUrl = null;
     }
+  }
+
+  private ensureAudioContext(): AudioContext {
+    if (!this.audioContext) {
+      this.audioContext = new AudioContext();
+    }
+    return this.audioContext;
+  }
+
+  // Build the DSP graph once: source → EQ (10 bands) → bass boost →
+  // stereo widener (mid/side) → compressor → makeup gain → destination
+  private buildDspGraph(): boolean {
+    try {
+      const ctx = this.ensureAudioContext();
+
+      if (!this.mediaSource) {
+        this.mediaSource = ctx.createMediaElementSource(this.audio);
+        // From now on the element only sounds through the graph: route it
+        this.mediaSource.connect(ctx.destination);
+      }
+      if (this.chainInput && this.chainOutput) return true;
+
+      this.chainInput = ctx.createGain();
+
+      // 10-band EQ: shelves at the extremes, peaking in between
+      let node: AudioNode = this.chainInput;
+      this.eqFilters = EQ_BANDS.map((freq, i) => {
+        const filter = ctx.createBiquadFilter();
+        filter.type = i === 0 ? 'lowshelf' : i === EQ_BANDS.length - 1 ? 'highshelf' : 'peaking';
+        filter.frequency.value = freq;
+        filter.Q.value = 1.1;
+        filter.gain.value = 0;
+        node.connect(filter);
+        node = filter;
+        return filter;
+      });
+
+      // Dedicated bass boost below 80Hz
+      this.bassFilter = ctx.createBiquadFilter();
+      this.bassFilter.type = 'lowshelf';
+      this.bassFilter.frequency.value = 80;
+      this.bassFilter.gain.value = 0;
+      node.connect(this.bassFilter);
+
+      // Stereo widener: decompose into mid (L+R) and side (L-R), then
+      // recombine with the side channel amplified for extra width
+      const splitter = ctx.createChannelSplitter(2);
+      const merger = ctx.createChannelMerger(2);
+      const lToMid = ctx.createGain(); lToMid.gain.value = 0.5;
+      const rToMid = ctx.createGain(); rToMid.gain.value = 0.5;
+      const lToSide = ctx.createGain(); lToSide.gain.value = 0.5;
+      const rToSide = ctx.createGain(); rToSide.gain.value = -0.5;
+      const mid = ctx.createGain();
+      this.sideGain = ctx.createGain();
+      this.sideGain.gain.value = 1;
+      const sideInvert = ctx.createGain();
+      sideInvert.gain.value = -1;
+
+      this.bassFilter.connect(splitter);
+      splitter.connect(lToMid, 0);
+      splitter.connect(lToSide, 0);
+      splitter.connect(rToMid, 1);
+      splitter.connect(rToSide, 1);
+      lToMid.connect(mid);
+      rToMid.connect(mid);
+      lToSide.connect(this.sideGain);
+      rToSide.connect(this.sideGain);
+      mid.connect(merger, 0, 0);
+      mid.connect(merger, 0, 1);
+      this.sideGain.connect(merger, 0, 0);
+      this.sideGain.connect(sideInvert);
+      sideInvert.connect(merger, 0, 1);
+
+      // Volume leveling: made transparent (threshold 0) when disabled
+      this.compressor = ctx.createDynamicsCompressor();
+      this.compressor.threshold.value = 0;
+      this.compressor.knee.value = 30;
+      this.compressor.ratio.value = 3;
+      this.compressor.attack.value = 0.003;
+      this.compressor.release.value = 0.25;
+      this.makeupGain = ctx.createGain();
+
+      merger.connect(this.compressor);
+      this.compressor.connect(this.makeupGain);
+      this.chainOutput = this.makeupGain;
+      return true;
+    } catch (error) {
+      console.error('Failed to build DSP graph:', error);
+      return false;
+    }
+  }
+
+  // Route the media source through the DSP chain or straight to the output
+  private applyDspRouting(enabled: boolean): void {
+    if (!this.mediaSource || !this.audioContext || !this.chainInput || !this.chainOutput) return;
+
+    this.mediaSource.disconnect();
+    this.chainOutput.disconnect();
+
+    const tail = enabled ? this.chainOutput : this.mediaSource;
+    if (enabled) {
+      this.mediaSource.connect(this.chainInput);
+    }
+    tail.connect(this.audioContext.destination);
+    if (this.analyserNode) {
+      // Tap (not in series): feeds the visualizer from the audible signal
+      tail.connect(this.analyserNode);
+    }
+    this.dspEnabled = enabled;
+  }
+
+  // Apply sound enhancement settings, building the graph on first enable.
+  // Safe to call on every slider change: parameters update live.
+  applySoundSettings(sound: SoundEnhancementSettings): void {
+    if (sound.enabled) {
+      if (!this.buildDspGraph()) return;
+      this.resumeAudioContext();
+
+      this.eqFilters.forEach((filter, i) => {
+        filter.gain.value = sound.eqGains[i] ?? 0;
+      });
+      this.bassFilter!.gain.value = sound.bassBoost;
+      this.sideGain!.gain.value = 1 + sound.stereoWidth / 100;
+
+      if (sound.loudness) {
+        this.compressor!.threshold.value = -26;
+        this.makeupGain!.gain.value = Math.pow(10, 4 / 20); // +4dB makeup
+      } else {
+        this.compressor!.threshold.value = 0; // transparent
+        this.makeupGain!.gain.value = 1;
+      }
+
+      this.applyDspRouting(true);
+    } else if (this.mediaSource) {
+      this.applyDspRouting(false);
+    }
+    // Never enabled and disabled: nothing was ever routed, nothing to do
   }
 
   private setupEventListeners() {
@@ -468,6 +627,14 @@ class AudioPlayerService {
       this.pendingAutoPlay = true;
       this.audio.src = url;
       this.audio.volume = store.volume;
+
+      // Ensure the sound enhancement chain matches settings before playing
+      const { sound } = useSettingsStore.getState();
+      if (sound.enabled && !this.dspEnabled) {
+        this.applySoundSettings(sound);
+      } else if (this.mediaSource) {
+        this.resumeAudioContext();
+      }
 
       try {
         await this.audio.play();
