@@ -1,6 +1,7 @@
 import { db, type DownloadQueueEntity } from '@/db/database';
 import { cacheService } from '@/services/cache/CacheService';
-import { apiClient } from '@/services/api/client';
+import { apiClient, buildTranscodedUrlSync } from '@/services/api/client';
+import { useSettingsStore } from '@/stores/settingsStore';
 import type { Track } from '@/types/models';
 import { create } from 'zustand';
 import * as mm from 'music-metadata';
@@ -273,8 +274,23 @@ class DownloadManager {
       // Get API key for authentication
       const apiKey = await apiClient.getApiKey();
 
+      // Offline format setting: download transcoded (MP3/AAC) instead of the
+      // original when configured and the file isn't already in that format
+      const { downloadFormat, downloadBitrate } = useSettingsStore.getState();
+      const extension = item.fileName.split('.').pop()?.toLowerCase() ?? '';
+      const alreadyTargetFormat =
+        extension === downloadFormat ||
+        (downloadFormat === 'aac' && (extension === 'aac' || extension === 'm4a'));
+      let transcoded =
+        downloadFormat !== 'original' &&
+        !alreadyTargetFormat &&
+        item.streamUrl.includes('/stream/tfm/');
+      let downloadUrl = transcoded
+        ? buildTranscodedUrlSync(item.channelId, item.trackId, downloadFormat, downloadBitrate, item.fileName)
+        : item.streamUrl;
+
       // First request to check file size and if server returns partial content
-      const response = await fetch(item.streamUrl, {
+      let response = await fetch(downloadUrl, {
         signal: abortController.signal,
         headers: {
           'X-API-Key': apiKey,
@@ -282,9 +298,27 @@ class DownloadManager {
         }
       });
 
+      // Transcoding unavailable (e.g. no FFmpeg on the server): fall back to original
+      if (!response.ok && response.status !== 206 && transcoded) {
+        console.warn(`Transcoded download failed (HTTP ${response.status}), falling back to original format`);
+        transcoded = false;
+        downloadUrl = item.streamUrl;
+        response = await fetch(downloadUrl, {
+          signal: abortController.signal,
+          headers: {
+            'X-API-Key': apiKey,
+            'Range': 'bytes=0-'
+          }
+        });
+      }
+
       if (!response.ok && response.status !== 206) {
         throw new Error(`HTTP ${response.status}: ${response.statusText}`);
       }
+
+      const blobType = transcoded
+        ? (downloadFormat === 'mp3' ? 'audio/mpeg' : 'audio/mp4')
+        : 'audio/mpeg';
 
       // Check for partial response
       const contentRange = response.headers.get('content-range');
@@ -357,7 +391,7 @@ class DownloadManager {
       }
 
       // Create blob and save to cache
-      const blob = new Blob(chunks, { type: 'audio/mpeg' });
+      const blob = new Blob(chunks, { type: blobType });
 
       console.log('Download stats:', {
         fileName: item.fileName,

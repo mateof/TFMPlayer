@@ -28,12 +28,16 @@ interface SettingsState {
   autoCacheEnabled: boolean; // Cache streamed tracks in the background
   maxCacheSizeMB: number; // 0 = unlimited
   sound: SoundEnhancementSettings;
+  downloadFormat: 'original' | 'mp3' | 'aac'; // Format for offline downloads
+  downloadBitrate: number; // kbps, used when downloadFormat != original
 
   setConfigured: (configured: boolean) => void;
   setServerInfo: (host: string, port: number, useHttps: boolean) => void;
   setAutoCacheEnabled: (enabled: boolean) => void;
   setMaxCacheSizeMB: (sizeMB: number) => void;
   setSound: (partial: Partial<SoundEnhancementSettings>) => void;
+  setDownloadFormat: (format: 'original' | 'mp3' | 'aac') => void;
+  setDownloadBitrate: (bitrate: number) => void;
   clearSettings: () => void;
 }
 
@@ -47,6 +51,8 @@ export const useSettingsStore = create<SettingsState>()(
       autoCacheEnabled: true,
       maxCacheSizeMB: 2048,
       sound: DEFAULT_SOUND_SETTINGS,
+      downloadFormat: 'original',
+      downloadBitrate: 192,
 
       setConfigured: (configured) => set({ isConfigured: configured }),
       setServerInfo: (host, port, useHttps) =>
@@ -54,6 +60,8 @@ export const useSettingsStore = create<SettingsState>()(
       setAutoCacheEnabled: (enabled) => set({ autoCacheEnabled: enabled }),
       setMaxCacheSizeMB: (sizeMB) => set({ maxCacheSizeMB: sizeMB }),
       setSound: (partial) => set((s) => ({ sound: { ...s.sound, ...partial } })),
+      setDownloadFormat: (format) => set({ downloadFormat: format }),
+      setDownloadBitrate: (bitrate) => set({ downloadBitrate: bitrate }),
       clearSettings: () =>
         set({ isConfigured: false, serverHost: '', serverPort: 5000, useHttps: false })
     }),

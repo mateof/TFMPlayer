@@ -8,6 +8,7 @@ import { db, getServerConfig, saveServerConfig, clearServerConfig } from '@/db/d
 import { apiClient } from '@/services/api/client';
 import { cacheService } from '@/services/cache/CacheService';
 import { audioPlayer } from '@/services/audio/AudioPlayerService';
+import { streamApi } from '@/services/api/stream.api';
 import { useSettingsStore, type SoundEnhancementSettings } from '@/stores/settingsStore';
 import { EQ_BAND_LABELS, EQ_PRESETS } from '@/utils/eqPresets';
 import { useUiStore } from '@/stores/uiStore';
@@ -23,8 +24,44 @@ export function SettingsPage() {
     setAutoCacheEnabled,
     setMaxCacheSizeMB,
     sound,
-    setSound
+    setSound,
+    downloadFormat,
+    downloadBitrate,
+    setDownloadFormat,
+    setDownloadBitrate
   } = useSettingsStore();
+
+  const [transcodeUnavailable, setTranscodeUnavailable] = useState(false);
+
+  // Selecting MP3/AAC requires FFmpeg on the server: verify before accepting
+  const handleDownloadFormatChange = async (e: React.ChangeEvent<HTMLSelectElement>) => {
+    const format = e.target.value as 'original' | 'mp3' | 'aac';
+    if (format === 'original') {
+      setDownloadFormat(format);
+      setTranscodeUnavailable(false);
+      return;
+    }
+
+    try {
+      const info = await streamApi.getTranscodeInfo();
+      if (!info.ffmpegAvailable) {
+        setTranscodeUnavailable(true);
+        addToast('FFmpeg is not installed on the server. Downloads will keep the original format.', 'warning');
+        setDownloadFormat('original');
+        return;
+      }
+    } catch {
+      setTranscodeUnavailable(true);
+      addToast('The server does not support transcoding. Update TelegramFileManager.', 'warning');
+      setDownloadFormat('original');
+      return;
+    }
+
+    setTranscodeUnavailable(false);
+    setDownloadFormat(format);
+    // Default bitrate per format if the current one doesn't apply
+    if (format === 'aac' && downloadBitrate > 256) setDownloadBitrate(256);
+  };
 
   // Update the store and apply the DSP settings live
   const updateSound = (partial: Partial<SoundEnhancementSettings>) => {
@@ -268,6 +305,46 @@ export function SettingsPage() {
                 <option value={10240}>10 GB</option>
                 <option value={0}>Unlimited</option>
               </select>
+            </div>
+
+            {/* Offline download format (server-side transcoding) */}
+            <div className="p-4 bg-slate-800 rounded-lg">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm text-white">Download format</p>
+                  <p className="text-xs text-slate-400">
+                    Convert offline downloads (e.g. FLAC) to save space
+                  </p>
+                </div>
+                <div className="flex gap-2 shrink-0">
+                  <select
+                    value={downloadFormat}
+                    onChange={handleDownloadFormatChange}
+                    className="bg-slate-700 text-white text-sm rounded-lg px-3 py-2 border border-slate-600"
+                  >
+                    <option value="original">Original</option>
+                    <option value="mp3">MP3</option>
+                    <option value="aac">AAC</option>
+                  </select>
+                  {downloadFormat !== 'original' && (
+                    <select
+                      value={downloadBitrate}
+                      onChange={(e) => setDownloadBitrate(parseInt(e.target.value))}
+                      className="bg-slate-700 text-white text-sm rounded-lg px-3 py-2 border border-slate-600"
+                    >
+                      {(downloadFormat === 'mp3' ? [128, 192, 256, 320] : [96, 128, 192, 256]).map((rate) => (
+                        <option key={rate} value={rate}>{rate} kbps</option>
+                      ))}
+                    </select>
+                  )}
+                </div>
+              </div>
+              {transcodeUnavailable && (
+                <p className="mt-2 text-xs text-yellow-400">
+                  FFmpeg is not available on the server, so transcoding is disabled.
+                  Install FFmpeg on the TelegramFileManager host to enable it.
+                </p>
+              )}
             </div>
           </div>
         </section>

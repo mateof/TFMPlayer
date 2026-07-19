@@ -123,6 +123,26 @@ export async function buildLocalStreamUrlWithAuth(filePath: string): Promise<str
   return `${baseUrl}/api/mobile/stream/local?${params.toString()}`;
 }
 
+// Transcoded download URL (offline downloads in MP3/AAC). Auth goes via the
+// X-API-Key header, so no apiKey in the query string.
+export function buildTranscodedUrlSync(
+  channelId: string,
+  fileId: string,
+  format: string,
+  bitrate: number,
+  fileName?: string
+): string {
+  const baseUrl = apiClient.getBaseUrl();
+  if (!baseUrl) {
+    console.warn('buildTranscodedUrlSync called before API client initialized');
+  }
+  const params = new URLSearchParams();
+  params.set('format', format);
+  params.set('bitrate', String(bitrate));
+  if (fileName) params.set('fileName', fileName);
+  return `${baseUrl}/api/mobile/stream/tfm/${channelId}/${fileId}/transcoded?${params.toString()}`;
+}
+
 // Synchronous version that requires baseUrl to be pre-initialized
 export function buildStreamUrlSync(channelId: string, fileId: string, fileName?: string): string {
   const baseUrl = apiClient.getBaseUrl();
