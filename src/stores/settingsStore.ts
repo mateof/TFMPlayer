@@ -30,6 +30,9 @@ interface SettingsState {
   sound: SoundEnhancementSettings;
   downloadFormat: 'original' | 'mp3' | 'aac'; // Format for offline downloads
   downloadBitrate: number; // kbps, used when downloadFormat != original
+  skipButtonsEnabled: boolean; // Show ±N seconds skip buttons in the player
+  skipBackSeconds: number;
+  skipForwardSeconds: number;
 
   setConfigured: (configured: boolean) => void;
   setServerInfo: (host: string, port: number, useHttps: boolean) => void;
@@ -38,6 +41,9 @@ interface SettingsState {
   setSound: (partial: Partial<SoundEnhancementSettings>) => void;
   setDownloadFormat: (format: 'original' | 'mp3' | 'aac') => void;
   setDownloadBitrate: (bitrate: number) => void;
+  setSkipButtonsEnabled: (enabled: boolean) => void;
+  setSkipBackSeconds: (seconds: number) => void;
+  setSkipForwardSeconds: (seconds: number) => void;
   clearSettings: () => void;
 }
 
@@ -53,6 +59,9 @@ export const useSettingsStore = create<SettingsState>()(
       sound: DEFAULT_SOUND_SETTINGS,
       downloadFormat: 'original',
       downloadBitrate: 192,
+      skipButtonsEnabled: false,
+      skipBackSeconds: 10,
+      skipForwardSeconds: 30,
 
       setConfigured: (configured) => set({ isConfigured: configured }),
       setServerInfo: (host, port, useHttps) =>
@@ -62,6 +71,9 @@ export const useSettingsStore = create<SettingsState>()(
       setSound: (partial) => set((s) => ({ sound: { ...s.sound, ...partial } })),
       setDownloadFormat: (format) => set({ downloadFormat: format }),
       setDownloadBitrate: (bitrate) => set({ downloadBitrate: bitrate }),
+      setSkipButtonsEnabled: (enabled) => set({ skipButtonsEnabled: enabled }),
+      setSkipBackSeconds: (seconds) => set({ skipBackSeconds: seconds }),
+      setSkipForwardSeconds: (seconds) => set({ skipForwardSeconds: seconds }),
       clearSettings: () =>
         set({ isConfigured: false, serverHost: '', serverPort: 5000, useHttps: false })
     }),

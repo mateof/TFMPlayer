@@ -504,11 +504,11 @@ class AudioPlayerService {
       }
     });
     navigator.mediaSession.setActionHandler('seekbackward', (details) => {
-      const skipTime = details.seekOffset || 10;
+      const skipTime = details.seekOffset || useSettingsStore.getState().skipBackSeconds || 10;
       this.seek(Math.max(this.audio.currentTime - skipTime, 0));
     });
     navigator.mediaSession.setActionHandler('seekforward', (details) => {
-      const skipTime = details.seekOffset || 10;
+      const skipTime = details.seekOffset || useSettingsStore.getState().skipForwardSeconds || 10;
       this.seek(Math.min(this.audio.currentTime + skipTime, this.audio.duration));
     });
   }

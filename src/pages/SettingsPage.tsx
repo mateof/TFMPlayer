@@ -28,8 +28,16 @@ export function SettingsPage() {
     downloadFormat,
     downloadBitrate,
     setDownloadFormat,
-    setDownloadBitrate
+    setDownloadBitrate,
+    skipButtonsEnabled,
+    skipBackSeconds,
+    skipForwardSeconds,
+    setSkipButtonsEnabled,
+    setSkipBackSeconds,
+    setSkipForwardSeconds
   } = useSettingsStore();
+
+  const SKIP_OPTIONS = [5, 10, 15, 20, 30, 45, 60, 90];
 
   const [transcodeUnavailable, setTranscodeUnavailable] = useState(false);
 
@@ -346,6 +354,66 @@ export function SettingsPage() {
                 </p>
               )}
             </div>
+          </div>
+        </section>
+
+        <div className="h-px bg-slate-700 mx-4" />
+
+        {/* Player */}
+        <section className="p-4">
+          <h2 className="text-sm font-medium text-slate-400 uppercase mb-4">
+            Player
+          </h2>
+          <div className="space-y-3">
+            <div className="flex items-center justify-between p-4 bg-slate-800 rounded-lg">
+              <div>
+                <p className="text-sm text-white">Skip buttons</p>
+                <p className="text-xs text-slate-400">
+                  Jump backward/forward buttons in the expanded player
+                </p>
+              </div>
+              <button
+                onClick={() => setSkipButtonsEnabled(!skipButtonsEnabled)}
+                className={`w-12 h-6 rounded-full transition-colors shrink-0 ${
+                  skipButtonsEnabled ? 'bg-emerald-500' : 'bg-slate-600'
+                }`}
+              >
+                <div
+                  className={`w-5 h-5 bg-white rounded-full shadow transition-transform ${
+                    skipButtonsEnabled ? 'translate-x-6' : 'translate-x-0.5'
+                  }`}
+                />
+              </button>
+            </div>
+
+            {skipButtonsEnabled && (
+              <div className="flex items-center gap-3 p-4 bg-slate-800 rounded-lg">
+                <div className="flex-1">
+                  <p className="text-xs text-slate-400 mb-1">Backward</p>
+                  <select
+                    value={skipBackSeconds}
+                    onChange={(e) => setSkipBackSeconds(parseInt(e.target.value))}
+                    className="w-full bg-slate-700 text-white text-sm rounded-lg px-3 py-2 border border-slate-600"
+                  >
+                    {SKIP_OPTIONS.map((s) => (
+                      <option key={s} value={s}>{s} seconds</option>
+                    ))}
+                  </select>
+                </div>
+                <div className="flex-1">
+                  <p className="text-xs text-slate-400 mb-1">Forward</p>
+                  <select
+                    value={skipForwardSeconds}
+                    onChange={(e) => setSkipForwardSeconds(parseInt(e.target.value))}
+                    className="w-full bg-slate-700 text-white text-sm rounded-lg px-3 py-2 border border-slate-600"
+                  >
+                    {SKIP_OPTIONS.map((s) => (
+                      <option key={s} value={s}>{s} seconds</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+            )}
           </div>
         </section>
 

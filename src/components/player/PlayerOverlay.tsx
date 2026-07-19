@@ -15,7 +15,9 @@ import {
   X,
   Loader2,
   Activity,
-  GripVertical
+  GripVertical,
+  RotateCcw,
+  RotateCw
 } from 'lucide-react';
 import { useAudioPlayer } from '@/hooks/useAudioPlayer';
 import { formatDuration, formatFileSize } from '@/utils/format';
@@ -24,6 +26,7 @@ import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { PlaylistPicker } from '@/components/playlists/PlaylistPicker';
 import { useUiStore } from '@/stores/uiStore';
 import { usePlayerStore } from '@/stores/playerStore';
+import { useSettingsStore } from '@/stores/settingsStore';
 import { audioMetadataService, type AudioMetadata } from '@/services/audio/AudioMetadataService';
 import { audioPlayer } from '@/services/audio/AudioPlayerService';
 import { cacheService } from '@/services/cache/CacheService';
@@ -105,6 +108,9 @@ export function PlayerOverlay() {
   const toggleEqualizer = usePlayerStore((s) => s.toggleEqualizer);
   const moveInQueue = usePlayerStore((s) => s.moveInQueue);
   const queueSource = usePlayerStore((s) => s.queueSource);
+  const skipButtonsEnabled = useSettingsStore((s) => s.skipButtonsEnabled);
+  const skipBackSeconds = useSettingsStore((s) => s.skipBackSeconds);
+  const skipForwardSeconds = useSettingsStore((s) => s.skipForwardSeconds);
   const [showQueue, setShowQueue] = useState(false);
   const [loadingMoreQueue, setLoadingMoreQueue] = useState(false);
   const [showPlaylistPicker, setShowPlaylistPicker] = useState(false);
@@ -782,6 +788,25 @@ export function PlayerOverlay() {
 
           {/* Controls */}
           <div className="px-8 py-6">
+            {/* Configurable ±N seconds skip buttons */}
+            {skipButtonsEnabled && (
+              <div className="flex items-center justify-center gap-10 mb-4">
+                <button
+                  onClick={() => seek(Math.max(0, position - skipBackSeconds))}
+                  className="flex flex-col items-center text-slate-300 hover:text-white transition-colors"
+                >
+                  <RotateCcw className="w-6 h-6" />
+                  <span className="text-[10px] mt-0.5 tabular-nums">{skipBackSeconds}s</span>
+                </button>
+                <button
+                  onClick={() => seek(position + skipForwardSeconds)}
+                  className="flex flex-col items-center text-slate-300 hover:text-white transition-colors"
+                >
+                  <RotateCw className="w-6 h-6" />
+                  <span className="text-[10px] mt-0.5 tabular-nums">{skipForwardSeconds}s</span>
+                </button>
+              </div>
+            )}
             <div className="flex items-center justify-between">
               <button
                 onClick={toggleShuffle}
