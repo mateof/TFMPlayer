@@ -32,6 +32,12 @@ class AudioPlayerService {
   // can't fire its stale callback on the next track's load
   private swapLoadedListener: (() => void) | null = null;
 
+  // Periodic retry while playback should be running but isn't. Critical for
+  // track transitions with the screen off: if the browser blocks play() or
+  // suspends the AudioContext there, no event-based retry ever fires, the
+  // audio stays silent and Android eventually kills the app.
+  private autoPlayWatchdog: number | null = null;
+
   // Web Audio API for visualizer (lazy initialization)
   // Uses captureStream() to analyze audio WITHOUT affecting playback quality
   private audioContext: AudioContext | null = null;
@@ -193,6 +199,21 @@ class AudioPlayerService {
   private ensureAudioContext(): AudioContext {
     if (!this.audioContext) {
       this.audioContext = new AudioContext();
+
+      // If the OS suspends the context while audio should be flowing through
+      // the DSP graph (screen off, focus changes), resume it right away —
+      // otherwise playback continues silently and Android ends up killing
+      // the app for being inaudible
+      this.audioContext.addEventListener('statechange', () => {
+        if (
+          this.audioContext &&
+          this.audioContext.state !== 'running' &&
+          this.mediaSource &&
+          !this.audio.paused
+        ) {
+          this.audioContext.resume().catch(() => {});
+        }
+      });
     }
     return this.audioContext;
   }
@@ -435,6 +456,7 @@ class AudioPlayerService {
 
     this.audio.addEventListener('playing', () => {
       this.pendingAutoPlay = false;
+      this.stopAutoPlayWatchdog();
       store().setState('playing');
     });
 
@@ -667,6 +689,10 @@ class AudioPlayerService {
         }
       }
 
+      // Keep retrying in the background (screen off, throttled tab) until
+      // playback actually starts
+      this.startAutoPlayWatchdog();
+
       // Refresh visualizer connection for new track
       this.refreshVisualizer();
 
@@ -705,6 +731,7 @@ class AudioPlayerService {
 
   pause(): void {
     this.pendingAutoPlay = false;
+    this.stopAutoPlayWatchdog();
     this.audio.pause();
   }
 
@@ -745,6 +772,28 @@ class AudioPlayerService {
       }
     } catch (error) {
       console.error('Seek error:', error);
+    }
+  }
+
+  private startAutoPlayWatchdog(): void {
+    this.stopAutoPlayWatchdog();
+    let attempts = 0;
+    this.autoPlayWatchdog = window.setInterval(() => {
+      const playbackRunning = !this.audio.paused && !this.audio.ended;
+      if (!this.pendingAutoPlay || playbackRunning || attempts >= 15) {
+        this.stopAutoPlayWatchdog();
+        return;
+      }
+      attempts++;
+      this.resumeAudioContext();
+      this.audio.play().catch(() => {});
+    }, 2000);
+  }
+
+  private stopAutoPlayWatchdog(): void {
+    if (this.autoPlayWatchdog !== null) {
+      clearInterval(this.autoPlayWatchdog);
+      this.autoPlayWatchdog = null;
     }
   }
 
@@ -899,6 +948,7 @@ class AudioPlayerService {
     this.revokeBlobUrl();
     this.cachedBlobForCurrentTrack = null;
     this.pendingAutoPlay = false;
+    this.stopAutoPlayWatchdog();
     this.clearSwapLoadedListener();
     playbackCache.cancel();
     this.lastBufferedKey = '';
