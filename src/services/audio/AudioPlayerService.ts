@@ -44,12 +44,14 @@ class AudioPlayerService {
   // the graph is built lazily on first enable and bypassed when disabled.
   private mediaSource: MediaElementAudioSourceNode | null = null;
   private chainInput: GainNode | null = null;
-  private chainOutput: GainNode | null = null;
+  private chainOutput: AudioNode | null = null;
   private eqFilters: BiquadFilterNode[] = [];
   private bassFilter: BiquadFilterNode | null = null;
   private sideGain: GainNode | null = null;
+  private mergerNode: ChannelMergerNode | null = null;
   private compressor: DynamicsCompressorNode | null = null;
   private makeupGain: GainNode | null = null;
+  private limiter: DynamicsCompressorNode | null = null;
   private dspEnabled = false;
 
   // Cover art for MediaSession
@@ -259,18 +261,32 @@ class AudioPlayerService {
       this.sideGain.connect(sideInvert);
       sideInvert.connect(merger, 0, 1);
 
-      // Volume leveling: made transparent (threshold 0) when disabled
+      this.mergerNode = merger;
+
+      // Volume leveling compressor: only wired into the path when the
+      // loudness setting is on (see applySoundSettings)
       this.compressor = ctx.createDynamicsCompressor();
-      this.compressor.threshold.value = 0;
-      this.compressor.knee.value = 30;
-      this.compressor.ratio.value = 3;
+      this.compressor.threshold.value = -24;
+      this.compressor.knee.value = 20;
+      this.compressor.ratio.value = 2.5;
       this.compressor.attack.value = 0.003;
       this.compressor.release.value = 0.25;
       this.makeupGain = ctx.createGain();
 
-      merger.connect(this.compressor);
+      // Safety limiter: always last, prevents clipping distortion when
+      // EQ/bass boosts push an already-loud master over full scale
+      this.limiter = ctx.createDynamicsCompressor();
+      this.limiter.threshold.value = -1.5;
+      this.limiter.knee.value = 0;
+      this.limiter.ratio.value = 20;
+      this.limiter.attack.value = 0.001;
+      this.limiter.release.value = 0.1;
+
+      // Default path (loudness off): merger → makeup → limiter
+      merger.connect(this.makeupGain);
       this.compressor.connect(this.makeupGain);
-      this.chainOutput = this.makeupGain;
+      this.makeupGain.connect(this.limiter);
+      this.chainOutput = this.limiter;
       return true;
     } catch (error) {
       console.error('Failed to build DSP graph:', error);
@@ -310,11 +326,15 @@ class AudioPlayerService {
       this.bassFilter!.gain.value = sound.bassBoost;
       this.sideGain!.gain.value = 1 + sound.stereoWidth / 100;
 
+      // Loudness: route through the compressor with auto-makeup so the net
+      // level stays comparable on loud masters and quiet tracks get lifted.
+      // makeup ≈ |threshold| · (1 − 1/ratio) / 2 = 24 · 0.6 / 2 ≈ +7dB
+      this.mergerNode!.disconnect();
       if (sound.loudness) {
-        this.compressor!.threshold.value = -26;
-        this.makeupGain!.gain.value = Math.pow(10, 4 / 20); // +4dB makeup
+        this.mergerNode!.connect(this.compressor!);
+        this.makeupGain!.gain.value = Math.pow(10, 7 / 20);
       } else {
-        this.compressor!.threshold.value = 0; // transparent
+        this.mergerNode!.connect(this.makeupGain!);
         this.makeupGain!.gain.value = 1;
       }
 
