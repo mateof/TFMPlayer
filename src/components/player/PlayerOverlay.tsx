@@ -319,6 +319,7 @@ export function PlayerOverlay() {
 
     // Reset metadata (but keep flip state if equalizer is on)
     setMetadata(null);
+    let cancelled = false;
 
     const loadMetadata = async () => {
       setLoadingMetadata(true);
@@ -328,6 +329,7 @@ export function PlayerOverlay() {
           currentTrack.streamUrl,
           currentTrack.fileSize
         );
+        if (cancelled) return;
         setMetadata(meta);
 
         // Update MediaSession cover art if available
@@ -337,13 +339,25 @@ export function PlayerOverlay() {
       } catch (error) {
         console.error('Failed to load metadata:', error);
       } finally {
-        setLoadingMetadata(false);
+        if (!cancelled) setLoadingMetadata(false);
       }
     };
 
     // Delay loading slightly to let playback start first
     const timeout = setTimeout(loadMetadata, 500);
-    return () => clearTimeout(timeout);
+
+    // With the screen off the service only returns stored fields (no file
+    // parsing in background): run the full extraction once visible again
+    const onVisible = () => {
+      if (!document.hidden) loadMetadata();
+    };
+    document.addEventListener('visibilitychange', onVisible);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(timeout);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
   }, [currentTrack?.fileId]);
 
   // Load cover arts for queue tracks

@@ -48,15 +48,19 @@ export default defineConfig({
         globPatterns: ['**/*.{js,css,html,ico,png,svg,woff2}'],
         runtimeCaching: [
           {
-            urlPattern: /\/api\/mobile\//,
+            // Never cache audio streams in the SW (IndexedDB handles those);
+            // for the rest of the API fall back to the cached response fast
+            // when the server doesn't answer, and keep entries long enough
+            // to be useful offline
+            urlPattern: /\/api\/mobile\/(?!stream\/)/,
             handler: 'NetworkFirst',
             options: {
               cacheName: 'api-cache',
               expiration: {
-                maxEntries: 100,
-                maxAgeSeconds: 60 * 60
+                maxEntries: 200,
+                maxAgeSeconds: 7 * 24 * 60 * 60
               },
-              networkTimeoutSeconds: 10
+              networkTimeoutSeconds: 4
             }
           }
         ]

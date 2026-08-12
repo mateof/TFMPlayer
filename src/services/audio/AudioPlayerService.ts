@@ -32,11 +32,26 @@ class AudioPlayerService {
   // can't fire its stale callback on the next track's load
   private swapLoadedListener: (() => void) | null = null;
 
-  // Periodic retry while playback should be running but isn't. Critical for
-  // track transitions with the screen off: if the browser blocks play() or
-  // suspends the AudioContext there, no event-based retry ever fires, the
-  // audio stays silent and Android eventually kills the app.
-  private autoPlayWatchdog: number | null = null;
+  // True while sound is supposed to be coming out (play/resume, until the
+  // user pauses or the queue ends). Drives the health monitor below.
+  private playbackIntent = false;
+
+  // Playback health monitor. Critical for track transitions with the screen
+  // off: if the browser blocks play(), suspends the AudioContext or freezes
+  // the element, no event-based retry ever fires and the audio stays silent
+  // until Android kills the app. Runs for as long as playback is intended
+  // (hidden-page timer throttling still fires it about once a minute, which
+  // is enough to revive playback).
+  private healthMonitor: number | null = null;
+  private lastHealthPosition = -1;
+  private stallTicks = 0;
+
+  // Error recovery bookkeeping: reload the failing track a couple of times
+  // (fresh blob URL / stream), then skip forward instead of leaving the
+  // queue dead
+  private errorRetryTrackId: string | null = null;
+  private errorRetryCount = 0;
+  private consecutiveErrorSkips = 0;
 
   // Web Audio API for visualizer (lazy initialization)
   // Uses captureStream() to analyze audio WITHOUT affecting playback quality
@@ -165,6 +180,11 @@ class AudioPlayerService {
 
   // Called when track changes to refresh visualizer connection
   refreshVisualizer(): void {
+    // Nothing to draw with the screen off, and captureStream work during a
+    // background track change is wasted effort: reconnection happens on the
+    // visibilitychange listener instead
+    if (document.hidden) return;
+
     // With captureStream, we need to reconnect when the track changes
     // because the stream changes with the audio source
     this.resumeAudioContext();
@@ -399,8 +419,13 @@ class AudioPlayerService {
     // If autoplay was blocked while the tab was hidden (e.g. auto-advance
     // with the screen off), retry as soon as the tab becomes visible
     document.addEventListener('visibilitychange', () => {
-      if (!document.hidden && this.pendingAutoPlay && this.audio.paused && this.audio.src) {
+      if (document.hidden) return;
+      if (this.pendingAutoPlay && this.audio.paused && this.audio.src) {
         this.audio.play().catch(console.error);
+      }
+      // Reconnect the visualizer stream skipped while hidden
+      if (this.visualizerInitialized) {
+        this.refreshVisualizer();
       }
     });
 
@@ -456,11 +481,16 @@ class AudioPlayerService {
 
     this.audio.addEventListener('playing', () => {
       this.pendingAutoPlay = false;
-      this.stopAutoPlayWatchdog();
+      this.errorRetryCount = 0;
+      this.consecutiveErrorSkips = 0;
+      this.stallTicks = 0;
       store().setState('playing');
     });
 
     this.audio.addEventListener('error', (e) => {
+      // Clearing src (stop) fires a spurious error event: ignore it
+      if (!this.audio.src || this.audio.src === window.location.href) return;
+
       const error = this.audio.error;
       console.error('Audio error:', {
         event: e,
@@ -470,6 +500,31 @@ class AudioPlayerService {
         duration: this.audio.duration,
         src: this.audio.src?.substring(0, 100)
       });
+
+      // Self-heal instead of leaving the queue dead (essential with the
+      // screen off, where the user can't tap retry)
+      const { currentTrack, queue, currentIndex } = usePlayerStore.getState();
+      if (this.playbackIntent && currentTrack) {
+        if (this.errorRetryTrackId !== currentTrack.fileId) {
+          this.errorRetryTrackId = currentTrack.fileId;
+          this.errorRetryCount = 0;
+        }
+        if (this.errorRetryCount < 2) {
+          this.errorRetryCount++;
+          console.warn(`Retrying track after error (attempt ${this.errorRetryCount})`);
+          window.setTimeout(() => {
+            if (this.playbackIntent) this.play(currentTrack).catch(() => {});
+          }, 1000);
+          return;
+        }
+        if (this.consecutiveErrorSkips < 5 && currentIndex < queue.length - 1) {
+          this.consecutiveErrorSkips++;
+          console.warn('Track failed repeatedly, skipping to next');
+          this.next().catch(() => {});
+          return;
+        }
+      }
+
       store().setState('error');
       store().setError(error?.message || 'Playback error');
     });
@@ -667,6 +722,7 @@ class AudioPlayerService {
       // retry the play() if this first attempt is rejected (autoplay policy,
       // background tab) so auto-advance never leaves the track paused.
       this.pendingAutoPlay = true;
+      this.playbackIntent = true;
       this.audio.src = url;
       this.audio.volume = store.volume;
 
@@ -689,9 +745,9 @@ class AudioPlayerService {
         }
       }
 
-      // Keep retrying in the background (screen off, throttled tab) until
-      // playback actually starts
-      this.startAutoPlayWatchdog();
+      // Keep watching in the background (screen off, throttled tab) until
+      // playback actually starts, and while it runs
+      this.startHealthMonitor();
 
       // Refresh visualizer connection for new track
       this.refreshVisualizer();
@@ -731,13 +787,16 @@ class AudioPlayerService {
 
   pause(): void {
     this.pendingAutoPlay = false;
-    this.stopAutoPlayWatchdog();
+    this.playbackIntent = false;
+    this.stopHealthMonitor();
     this.audio.pause();
   }
 
   resume(): void {
     if (this.audio.src) {
       this.pendingAutoPlay = true;
+      this.playbackIntent = true;
+      this.startHealthMonitor();
       this.audio.play().catch(console.error);
     }
   }
@@ -745,9 +804,13 @@ class AudioPlayerService {
   async togglePlayPause(): Promise<void> {
     if (this.audio.paused) {
       this.pendingAutoPlay = true;
+      this.playbackIntent = true;
+      this.startHealthMonitor();
       await this.audio.play();
     } else {
       this.pendingAutoPlay = false;
+      this.playbackIntent = false;
+      this.stopHealthMonitor();
       this.audio.pause();
     }
   }
@@ -775,26 +838,66 @@ class AudioPlayerService {
     }
   }
 
-  private startAutoPlayWatchdog(): void {
-    this.stopAutoPlayWatchdog();
-    let attempts = 0;
-    this.autoPlayWatchdog = window.setInterval(() => {
-      const playbackRunning = !this.audio.paused && !this.audio.ended;
-      if (!this.pendingAutoPlay || playbackRunning || attempts >= 15) {
-        this.stopAutoPlayWatchdog();
-        return;
-      }
-      attempts++;
-      this.resumeAudioContext();
-      this.audio.play().catch(() => {});
-    }, 2000);
+  private startHealthMonitor(): void {
+    if (this.healthMonitor !== null) return;
+    this.lastHealthPosition = -1;
+    this.stallTicks = 0;
+    this.healthMonitor = window.setInterval(() => this.healthCheck(), 3000);
   }
 
-  private stopAutoPlayWatchdog(): void {
-    if (this.autoPlayWatchdog !== null) {
-      clearInterval(this.autoPlayWatchdog);
-      this.autoPlayWatchdog = null;
+  private stopHealthMonitor(): void {
+    if (this.healthMonitor !== null) {
+      clearInterval(this.healthMonitor);
+      this.healthMonitor = null;
     }
+  }
+
+  private healthCheck(): void {
+    if (!this.playbackIntent) {
+      this.stopHealthMonitor();
+      return;
+    }
+
+    // Keep the AudioContext alive while sound is routed through it
+    if (this.mediaSource && this.audioContext && this.audioContext.state !== 'running') {
+      this.audioContext.resume().catch(() => {});
+    }
+
+    const playing = !this.audio.paused && !this.audio.ended;
+
+    // Should be starting but isn't (blocked autoplay, background races):
+    // keep re-issuing play(). OS-initiated pauses mid-track (phone call,
+    // another app taking audio focus) are respected: pendingAutoPlay is
+    // false once a track has started.
+    if (!playing) {
+      if (this.pendingAutoPlay && this.audio.src) {
+        this.audio.play().catch(() => {});
+      }
+      return;
+    }
+
+    // Element claims to be playing but time is frozen: reload local sources.
+    // Network sources are left alone, a stall there is usually buffering.
+    const pos = this.audio.currentTime;
+    if (pos === this.lastHealthPosition && this.audio.src.startsWith('blob:')) {
+      this.stallTicks++;
+      if (this.stallTicks >= 3) {
+        console.warn('Playback frozen, reloading source at', pos);
+        this.stallTicks = 0;
+        this.pendingAutoPlay = true;
+        const src = this.audio.src;
+        this.audio.addEventListener('loadedmetadata', () => {
+          // Only restore position if the track didn't change meanwhile
+          if (this.audio.src !== src) return;
+          this.audio.currentTime = pos;
+          this.audio.play().catch(() => {});
+        }, { once: true });
+        this.audio.load();
+      }
+    } else {
+      this.stallTicks = 0;
+    }
+    this.lastHealthPosition = pos;
   }
 
   private clearSwapLoadedListener(): void {
@@ -948,7 +1051,8 @@ class AudioPlayerService {
     this.revokeBlobUrl();
     this.cachedBlobForCurrentTrack = null;
     this.pendingAutoPlay = false;
-    this.stopAutoPlayWatchdog();
+    this.playbackIntent = false;
+    this.stopHealthMonitor();
     this.clearSwapLoadedListener();
     playbackCache.cancel();
     this.lastBufferedKey = '';

@@ -15,7 +15,10 @@ import {
   getOfflinePlaylist,
   saveOfflinePlaylist,
   deleteOfflinePlaylist,
-  db
+  getApiCache,
+  setApiCache,
+  db,
+  type OfflinePlaylistEntity
 } from '@/db/database';
 import type { PlaylistDetail, Track } from '@/types/models';
 
@@ -34,6 +37,7 @@ export function PlaylistDetailPage() {
   const [cachedDurations, setCachedDurations] = useState<Record<string, number>>({});
   const [isOffline, setIsOffline] = useState(false);
   const [isOfflineMode, setIsOfflineMode] = useState(false);
+  const [syncing, setSyncing] = useState(false);
   const [togglingOffline, setTogglingOffline] = useState(false);
   const [draggedIndex, setDraggedIndex] = useState<number | null>(null);
   const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
@@ -110,6 +114,20 @@ export function PlaylistDetailPage() {
     return () => clearInterval(interval);
   }, [playlist?.tracks, activeDownloads.size]);
 
+  // Map an offline-saved playlist to the shape the page renders
+  const offlineToDetail = (data: OfflinePlaylistEntity): PlaylistDetail => ({
+    id: data.id,
+    name: data.name,
+    description: data.description,
+    trackCount: data.trackCount,
+    tracks: JSON.parse(data.tracksJson) as Track[],
+    dateCreated: data.savedAt.toISOString(),
+    dateModified: data.lastSyncedAt?.toISOString() || data.savedAt.toISOString()
+  });
+
+  // Cache-first: render local data instantly (offline copy, or the detail
+  // cached on the last visit), then refresh from the server in the
+  // background. Navigation never waits for the network.
   const loadPlaylist = async () => {
     setLoading(true);
 
@@ -117,11 +135,35 @@ export function PlaylistDetailPage() {
     const offlineData = await getOfflinePlaylist(id!);
     setIsOffline(!!offlineData);
 
+    const cachedDetail = offlineData
+      ? offlineToDetail(offlineData)
+      : await getApiCache<PlaylistDetail>(`playlist-detail:${id}`);
+
+    const renderedFromCache = !!cachedDetail;
+    if (cachedDetail) {
+      setPlaylist(cachedDetail);
+      // Read-only until the server confirms the data is current
+      setIsOfflineMode(true);
+      setLoading(false);
+      updateCacheStatus(cachedDetail.tracks);
+    }
+
+    await syncFromServer(offlineData, renderedFromCache);
+    if (!renderedFromCache) setLoading(false);
+  };
+
+  const syncFromServer = async (
+    offlineData: OfflinePlaylistEntity | undefined,
+    renderedFromCache: boolean
+  ) => {
+    setSyncing(true);
     try {
-      // Try to load from server
       const data = await playlistsApi.getById(id!);
       setPlaylist(data);
       setIsOfflineMode(false);
+
+      // Keep the last server response available for offline visits
+      setApiCache(`playlist-detail:${id}`, data).catch(() => {});
 
       // Update offline cache if it exists and auto-download new tracks
       if (offlineData) {
@@ -151,26 +193,14 @@ export function PlaylistDetailPage() {
     } catch (error) {
       console.error('Failed to load from server:', error);
 
-      // Try to load from offline cache
-      if (offlineData) {
-        const tracks = JSON.parse(offlineData.tracksJson) as Track[];
-        setPlaylist({
-          id: offlineData.id,
-          name: offlineData.name,
-          description: offlineData.description,
-          trackCount: offlineData.trackCount,
-          tracks,
-          dateCreated: offlineData.savedAt.toISOString(),
-          dateModified: offlineData.lastSyncedAt?.toISOString() || offlineData.savedAt.toISOString()
-        });
+      if (renderedFromCache) {
+        // Already showing the cached copy: just stay in offline mode
         setIsOfflineMode(true);
-        await updateCacheStatus(tracks);
-        addToast('Offline mode - showing cached playlist', 'info');
       } else {
         addToast('Failed to load playlist', 'error');
       }
     } finally {
-      setLoading(false);
+      setSyncing(false);
     }
   };
 
@@ -179,8 +209,10 @@ export function PlaylistDetailPage() {
     const newCoverArts: Record<string, string> = {};
     const newDurations: Record<string, number> = {};
 
-    for (const track of tracks) {
-      const cachedTrack = await cacheService.getCachedTrack(track.fileId);
+    // Single bulk read instead of one IndexedDB transaction per track
+    const cachedEntries = await db.cachedTracks.bulkGet(tracks.map(t => t.fileId));
+    cachedEntries.forEach((cachedTrack, i) => {
+      const track = tracks[i];
       if (cachedTrack?.blob) {
         cachedIds.add(track.fileId);
         // Load cover art and duration from cached tracks
@@ -191,7 +223,7 @@ export function PlaylistDetailPage() {
           newDurations[track.fileId] = cachedTrack.duration;
         }
       }
-    }
+    });
 
     setCachedTrackIds(cachedIds);
     if (Object.keys(newCoverArts).length > 0) {
@@ -458,8 +490,9 @@ export function PlaylistDetailPage() {
             </div>
           </div>
         </div>
-        {/* Offline mode indicator */}
-        {isOfflineMode && (
+        {/* Offline mode indicator (hidden while the background sync is
+            still deciding whether the server is reachable) */}
+        {isOfflineMode && !syncing && (
           <div className="flex items-center gap-2 px-4 py-2 bg-amber-500/20 text-amber-400 text-sm">
             <WifiOff className="w-4 h-4" />
             <span>Offline mode</span>

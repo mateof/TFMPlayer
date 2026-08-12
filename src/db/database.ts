@@ -63,6 +63,14 @@ export interface PlayHistoryEntity {
   playedAt: Date;
 }
 
+// Generic cache of API responses (playlist details, channel lists...) so every
+// screen can render instantly from the last known data while offline
+export interface ApiCacheEntity {
+  key: string;
+  json: string;
+  cachedAt: Date;
+}
+
 // Cached playlists list (for offline access to all playlists)
 export interface CachedPlaylistEntity {
   id: string;
@@ -81,6 +89,7 @@ class TFMAudioDatabase extends Dexie {
   downloadQueue!: Table<DownloadQueueEntity>;
   playHistory!: Table<PlayHistoryEntity>;
   cachedPlaylists!: Table<CachedPlaylistEntity>;
+  apiCache!: Table<ApiCacheEntity>;
 
   constructor() {
     super('TFMAudioDB');
@@ -111,6 +120,17 @@ class TFMAudioDatabase extends Dexie {
       downloadQueue: '++id, trackId, status, addedAt',
       playHistory: '++id, trackId, playedAt',
       cachedPlaylists: 'id, cachedAt'
+    });
+
+    // Version 4: Generic API response cache for offline-first screens
+    this.version(4).stores({
+      serverConfig: '++id',
+      cachedTracks: 'id, channelId, cachedAt, lastPlayedAt',
+      offlinePlaylists: 'id, autoSync',
+      downloadQueue: '++id, trackId, status, addedAt',
+      playHistory: '++id, trackId, playedAt',
+      cachedPlaylists: 'id, cachedAt',
+      apiCache: 'key'
     });
   }
 }
@@ -210,6 +230,25 @@ export async function updateCachedPlaylist(playlist: {
 
 export async function deleteCachedPlaylist(id: string): Promise<void> {
   await db.cachedPlaylists.delete(id);
+}
+
+// Generic API cache helpers
+export async function setApiCache(key: string, data: unknown): Promise<void> {
+  await db.apiCache.put({ key, json: JSON.stringify(data), cachedAt: new Date() });
+}
+
+export async function getApiCache<T>(key: string): Promise<T | undefined> {
+  const entry = await db.apiCache.get(key);
+  if (!entry) return undefined;
+  try {
+    return JSON.parse(entry.json) as T;
+  } catch {
+    return undefined;
+  }
+}
+
+export async function deleteApiCache(key: string): Promise<void> {
+  await db.apiCache.delete(key);
 }
 
 // Cover art helpers

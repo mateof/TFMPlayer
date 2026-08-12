@@ -6,6 +6,7 @@ import { Input } from '@/components/common/Input';
 import { LoadingScreen } from '@/components/common/Spinner';
 import { channelsApi } from '@/services/api/channels.api';
 import { useUiStore } from '@/stores/uiStore';
+import { getApiCache, setApiCache } from '@/db/database';
 import type { Channel, ChannelFolder } from '@/types/models';
 
 type Tab = 'all' | 'favorites' | 'folders' | 'local';
@@ -72,6 +73,28 @@ export function ChannelsPage() {
 
   const loadData = async () => {
     setLoading(true);
+
+    // Cache-first: render the lists from the last visit instantly, then
+    // refresh from the server in the background (offline navigation never
+    // waits for a network timeout)
+    const [cachedAll, cachedFav, cachedFolders] = await Promise.all([
+      getApiCache<Channel[]>('channels:all'),
+      getApiCache<Channel[]>('channels:favorites'),
+      getApiCache<{ folders: ChannelFolder[]; ungroupedChannels: Channel[] }>('channels:folders')
+    ]);
+
+    let renderedFromCache = false;
+    if (cachedAll?.length) {
+      setChannels(cachedAll);
+      setFavorites(cachedFav ?? []);
+      if (cachedFolders) {
+        setFolders(cachedFolders.folders);
+        setUngroupedChannels(cachedFolders.ungroupedChannels);
+      }
+      setLoading(false);
+      renderedFromCache = true;
+    }
+
     try {
       const [allChannels, favChannels, foldersData] = await Promise.all([
         channelsApi.getAll(),
@@ -83,8 +106,15 @@ export function ChannelsPage() {
       setFavorites(favChannels);
       setFolders(foldersData.folders);
       setUngroupedChannels(foldersData.ungroupedChannels);
+
+      // Keep the lists available for offline visits
+      setApiCache('channels:all', allChannels).catch(() => {});
+      setApiCache('channels:favorites', favChannels).catch(() => {});
+      setApiCache('channels:folders', foldersData).catch(() => {});
     } catch (error) {
-      addToast('Failed to load channels', 'error');
+      if (!renderedFromCache) {
+        addToast('Failed to load channels', 'error');
+      }
       console.error(error);
     } finally {
       setLoading(false);

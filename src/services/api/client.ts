@@ -22,7 +22,18 @@ class ApiClient {
         'X-API-Key': apiKey,
         'Content-Type': 'application/json'
       },
-      timeout: 30000
+      // Short timeout so unreachable-server situations fail fast and screens
+      // can fall back to their cached data instead of blocking for 30-60s
+      timeout: 8000
+    });
+
+    // Fail immediately when the device has no network at all: waiting for a
+    // timeout would freeze offline navigation for no reason
+    this.client.interceptors.request.use((config) => {
+      if (typeof navigator !== 'undefined' && !navigator.onLine) {
+        return Promise.reject(new Error('Device is offline'));
+      }
+      return config;
     });
 
     // Response interceptor for error handling

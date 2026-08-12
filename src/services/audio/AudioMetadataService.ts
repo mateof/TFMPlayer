@@ -1,5 +1,7 @@
 import * as mm from 'music-metadata';
 import { cacheService } from '@/services/cache/CacheService';
+import { db, getApiCache, setApiCache } from '@/db/database';
+import type { CachedTrackEntity } from '@/db/database';
 
 export interface AudioMetadata {
   // Technical info
@@ -24,6 +26,10 @@ export interface AudioMetadata {
 
   // Cover art
   coverArt?: string; // Base64 data URL
+
+  // True when built from stored fields without parsing the file (background
+  // mode): tags/cover are present but technical info may be missing
+  partial?: boolean;
 }
 
 class AudioMetadataService {
@@ -36,21 +42,39 @@ class AudioMetadataService {
     }
 
     try {
-      // Try to get from cached track first (full metadata available)
+      // Full metadata persisted from a previous parse: no file work at all
+      const persisted = await getApiCache<AudioMetadata>(`trackmeta:${trackId}`);
+      if (persisted) {
+        this.metadataCache.set(trackId, persisted);
+        return persisted;
+      }
+
       const cachedTrack = await cacheService.getCachedTrack(trackId);
+
+      // In the background (screen off / tab hidden) never parse audio files:
+      // the CPU/memory spike right after a track change can get the PWA killed
+      // by the OS. Serve the fields stored at download time instead.
+      if (document.hidden) {
+        return cachedTrack ? this.fromStoredFields(cachedTrack) : null;
+      }
+
       if (cachedTrack?.blob) {
         const metadata = await this.extractFromBlob(cachedTrack.blob);
         if (metadata) {
           metadata.fileSize = cachedTrack.fileSize;
           this.metadataCache.set(trackId, metadata);
+          await this.persistMetadata(trackId, cachedTrack, metadata);
           return metadata;
         }
       }
 
-      // Try to fetch partial data from URL for streaming tracks
+      // Try to fetch partial data from URL for streaming tracks (pointless
+      // without network)
+      if (!navigator.onLine) return null;
       const metadata = await this.extractFromUrl(streamUrl, fileSize);
       if (metadata) {
         this.metadataCache.set(trackId, metadata);
+        setApiCache(`trackmeta:${trackId}`, metadata).catch(() => {});
         return metadata;
       }
 
@@ -61,16 +85,47 @@ class AudioMetadataService {
     }
   }
 
+  // Build lightweight metadata from what was stored when the track was cached
+  private fromStoredFields(track: CachedTrackEntity): AudioMetadata {
+    return {
+      title: track.title,
+      artist: track.artist,
+      album: track.album,
+      duration: track.duration,
+      fileSize: track.fileSize,
+      coverArt: track.coverArt,
+      partial: true
+    };
+  }
+
+  // Save the full parse result so it never has to be repeated, and backfill
+  // the cached track record used by list views
+  private async persistMetadata(
+    trackId: string,
+    track: CachedTrackEntity,
+    metadata: AudioMetadata
+  ): Promise<void> {
+    try {
+      await setApiCache(`trackmeta:${trackId}`, metadata);
+      if (!track.metadataExtracted) {
+        await db.cachedTracks.update(trackId, {
+          title: metadata.title ?? track.title,
+          artist: metadata.artist ?? track.artist,
+          album: metadata.album ?? track.album,
+          duration: metadata.duration ?? track.duration,
+          coverArt: metadata.coverArt ?? track.coverArt,
+          metadataExtracted: true
+        });
+      }
+    } catch (error) {
+      console.warn('Failed to persist metadata:', error);
+    }
+  }
+
   private async extractFromBlob(blob: Blob): Promise<AudioMetadata | null> {
     try {
-      const buffer = await blob.arrayBuffer();
-      const uint8Array = new Uint8Array(buffer);
-
-      const metadata = await mm.parseBuffer(uint8Array, {
-        mimeType: blob.type || 'audio/mpeg',
-        size: blob.size
-      });
-
+      // parseBlob streams the file instead of copying it whole into memory
+      const metadata = await mm.parseBlob(blob);
       return this.parseMetadata(metadata, blob.size);
     } catch (error) {
       console.error('Failed to extract metadata from blob:', error);
