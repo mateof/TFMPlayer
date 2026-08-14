@@ -232,6 +232,32 @@ export async function deleteCachedPlaylist(id: string): Promise<void> {
   await db.cachedPlaylists.delete(id);
 }
 
+// Ask the browser to mark this origin's storage as persistent. Without it
+// Android treats IndexedDB as "best effort" and may evict every downloaded
+// track under storage pressure. Granted silently for installed PWAs.
+export async function requestPersistentStorage(): Promise<boolean> {
+  if (!navigator.storage?.persist) return false;
+  try {
+    if (await navigator.storage.persisted()) return true;
+    const granted = await navigator.storage.persist();
+    console.log(`Persistent storage ${granted ? 'granted' : 'denied'}`);
+    return granted;
+  } catch {
+    return false;
+  }
+}
+
+// Bytes currently used and available for this origin (undefined if unknown)
+export async function getStorageEstimate(): Promise<{ usage: number; quota: number } | null> {
+  if (!navigator.storage?.estimate) return null;
+  try {
+    const { usage, quota } = await navigator.storage.estimate();
+    return { usage: usage ?? 0, quota: quota ?? 0 };
+  } catch {
+    return null;
+  }
+}
+
 // Generic API cache helpers
 export async function setApiCache(key: string, data: unknown): Promise<void> {
   await db.apiCache.put({ key, json: JSON.stringify(data), cachedAt: new Date() });

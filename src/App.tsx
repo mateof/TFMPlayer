@@ -14,7 +14,7 @@ import { SettingsPage } from '@/pages/SettingsPage';
 import { LoadingScreen } from '@/components/common/Spinner';
 import { PWAUpdatePrompt } from '@/components/common/PWAUpdatePrompt';
 
-import { isServerConfigured } from '@/db/database';
+import { isServerConfigured, requestPersistentStorage } from '@/db/database';
 import { useSettingsStore } from '@/stores/settingsStore';
 import { playlistSyncService } from '@/services/sync/PlaylistSyncService';
 
@@ -34,6 +34,8 @@ function AppContent() {
 
   useEffect(() => {
     checkConfiguration();
+    // Protect downloaded tracks from being evicted by the OS
+    requestPersistentStorage();
   }, []);
 
   // Start playlist sync service when configured

@@ -53,6 +53,19 @@ class AudioPlayerService {
   private errorRetryCount = 0;
   private consecutiveErrorSkips = 0;
 
+  // True from the moment a new source is assigned until it starts playing.
+  // Assigning src runs the media load algorithm, which fires 'pause'; without
+  // this flag every track change told Android "playback stopped", which with
+  // the screen off is enough for the OS/browser to tear down the media
+  // session and freeze the page mid-transition.
+  private transitioning = false;
+
+  // Next track's source, resolved while the current one is still playing so
+  // the changeover needs no await (any silent async gap in the background is
+  // exactly when the page gets frozen)
+  private preloaded: { trackId: string; blob: Blob | null; url: string | null } | null = null;
+  private preloadAttemptedFor: string | null = null;
+
   // Web Audio API for visualizer (lazy initialization)
   // Uses captureStream() to analyze audio WITHOUT affecting playback quality
   private audioContext: AudioContext | null = null;
@@ -84,7 +97,9 @@ class AudioPlayerService {
 
   constructor() {
     this.audio = new Audio();
-    this.audio.preload = 'metadata';
+    // A source is only ever assigned when it is about to play, so buffering
+    // eagerly shortens the changeover the browser must survive
+    this.audio.preload = 'auto';
     // Enable CORS for cross-origin audio (needed for visualizer)
     this.audio.crossOrigin = 'anonymous';
     this.setupEventListeners();
@@ -444,13 +459,16 @@ class AudioPlayerService {
     });
 
     this.audio.addEventListener('pause', () => {
-      if (!this.audio.ended) {
-        store().setState('paused');
-        // Update MediaSession playback state and position
-        if (this.mediaSessionEnabled) {
-          navigator.mediaSession.playbackState = 'paused';
-          this.updatePositionState();
-        }
+      // A track change is not a pause: keep announcing 'playing' so the OS
+      // media session (and with it the page's right to keep running in the
+      // background) survives the changeover
+      if (this.transitioning || this.audio.ended) return;
+
+      store().setState('paused');
+      // Update MediaSession playback state and position
+      if (this.mediaSessionEnabled) {
+        navigator.mediaSession.playbackState = 'paused';
+        this.updatePositionState();
       }
     });
 
@@ -461,6 +479,7 @@ class AudioPlayerService {
     this.audio.addEventListener('timeupdate', () => {
       store().setPosition(this.audio.currentTime);
       this.updateBufferedRanges();
+      this.maybePreloadNext();
       // Throttle MediaSession position updates to avoid issues
       // The browser extrapolates position between updates
       const now = Date.now();
@@ -481,6 +500,7 @@ class AudioPlayerService {
 
     this.audio.addEventListener('playing', () => {
       this.pendingAutoPlay = false;
+      this.transitioning = false;
       this.errorRetryCount = 0;
       this.consecutiveErrorSkips = 0;
       this.stallTicks = 0;
@@ -658,32 +678,57 @@ class AudioPlayerService {
     usePlayerStore.getState().setBufferedRanges(ranges);
   }
 
-  private async getPlaybackUrl(track: Track): Promise<string> {
-    // Check if track is cached in IndexedDB (for offline playback)
+  // Where a track's audio comes from: the locally cached blob when available,
+  // otherwise a direct stream URL the browser can Range-request natively.
+  // Pure async lookup — it touches no player state, so it is safe to run
+  // ahead of time for the upcoming track.
+  private async resolveSource(
+    track: Track
+  ): Promise<{ blob: Blob | null; url: string | null }> {
     try {
       const cached = await db.cachedTracks.get(track.fileId);
-      if (cached?.blob) {
-        console.log('Playing from cache:', track.fileName);
-        this.cachedBlobForCurrentTrack = cached.blob;
-        const blobUrl = URL.createObjectURL(cached.blob);
-        this.currentBlobUrl = blobUrl;
-        return blobUrl;
-      }
+      if (cached?.blob) return { blob: cached.blob, url: null };
     } catch (e) {
       console.warn('Error checking cache:', e);
     }
 
-    // Build direct stream URL with apiKey for native browser streaming
-    // This allows the browser to handle Range requests natively (instant playback + seeking)
-    let url: string;
-    if (track.isLocalFile) {
-      url = await buildLocalStreamUrlWithAuth(track.filePath);
-    } else {
-      url = await buildStreamUrlWithAuth(track.channelId, track.fileId, track.fileName);
-    }
+    const url = track.isLocalFile
+      ? await buildLocalStreamUrlWithAuth(track.filePath)
+      : await buildStreamUrlWithAuth(track.channelId, track.fileId, track.fileName);
+    return { blob: null, url };
+  }
 
-    console.log('Streaming audio:', track.fileName, 'URL:', url.replace(/apiKey=[^&]+/, 'apiKey=***'));
-    return url;
+  // Resolve the upcoming track's source while the current one still plays, so
+  // the transition itself is synchronous. Skipped on shuffle (the next track
+  // isn't known) and when the source is a network stream anyway.
+  private maybePreloadNext(): void {
+    const { queue, currentIndex, shuffle, repeatMode } = usePlayerStore.getState();
+    if (shuffle || repeatMode === 'one') return;
+
+    const duration = this.audio.duration;
+    if (!Number.isFinite(duration) || duration - this.audio.currentTime > 30) return;
+
+    const nextIndex = currentIndex < queue.length - 1
+      ? currentIndex + 1
+      : repeatMode === 'all' ? 0 : -1;
+    if (nextIndex < 0 || nextIndex === currentIndex) return;
+
+    const nextTrack = queue[nextIndex];
+    if (!nextTrack || this.preloadAttemptedFor === nextTrack.fileId) return;
+    this.preloadAttemptedFor = nextTrack.fileId;
+
+    this.resolveSource(nextTrack)
+      .then((source) => {
+        this.preloaded = { trackId: nextTrack.fileId, ...source };
+      })
+      .catch(() => {});
+  }
+
+  private takePreloaded(track: Track): { blob: Blob | null; url: string | null } | null {
+    if (this.preloaded?.trackId !== track.fileId) return null;
+    const { blob, url } = this.preloaded;
+    this.preloaded = null;
+    return { blob, url };
   }
 
   async play(track: Track, queue?: Track[], startIndex?: number): Promise<void> {
@@ -703,17 +748,24 @@ class AudioPlayerService {
     this.currentCoverArt = null;
 
     try {
-      // Stop current playback and cleanup old blob URL if any
-      this.audio.pause();
-      this.audio.currentTime = 0;
-      this.revokeBlobUrl();
+      // Resolve the source BEFORE touching the element: the old track keeps
+      // playing meanwhile, so the page is never silent-and-idle waiting on
+      // IndexedDB. Usually already resolved by maybePreloadNext().
+      const source = this.takePreloaded(track) ?? await this.resolveSource(track);
+
+      // Everything below is synchronous through to play(), leaving no gap
+      // the browser could freeze the page in
+      this.transitioning = true;
+      const staleBlobUrl = this.currentBlobUrl;
       this.clearSwapLoadedListener();
-      this.cachedBlobForCurrentTrack = null;
+      this.cachedBlobForCurrentTrack = source.blob;
       this.lastBufferedKey = '';
+      this.preloadAttemptedFor = null;
       store.setBufferedRanges([]);
 
-      // Get playback URL (cached blob or direct stream URL with apiKey)
-      const url = await this.getPlaybackUrl(track);
+      this.currentBlobUrl = source.blob ? URL.createObjectURL(source.blob) : null;
+      const url = this.currentBlobUrl ?? source.url;
+      if (!url) throw new Error('No playable source for track');
 
       // Cached tracks are fully available from the start
       store.setCachedPercent(this.currentBlobUrl ? 100 : 0);
@@ -725,6 +777,9 @@ class AudioPlayerService {
       this.playbackIntent = true;
       this.audio.src = url;
       this.audio.volume = store.volume;
+
+      // Safe now that the element no longer references it
+      if (staleBlobUrl) URL.revokeObjectURL(staleBlobUrl);
 
       // Ensure the sound enhancement chain matches settings before playing
       const { sound } = useSettingsStore.getState();
@@ -770,6 +825,7 @@ class AudioPlayerService {
       }
     } catch (error) {
       console.error('Playback error:', error);
+      this.transitioning = false;
       store.setState('error');
       store.setError('Failed to play track');
     }
@@ -788,6 +844,7 @@ class AudioPlayerService {
   pause(): void {
     this.pendingAutoPlay = false;
     this.playbackIntent = false;
+    this.transitioning = false;
     this.stopHealthMonitor();
     this.audio.pause();
   }
@@ -1052,6 +1109,9 @@ class AudioPlayerService {
     this.cachedBlobForCurrentTrack = null;
     this.pendingAutoPlay = false;
     this.playbackIntent = false;
+    this.transitioning = false;
+    this.preloaded = null;
+    this.preloadAttemptedFor = null;
     this.stopHealthMonitor();
     this.clearSwapLoadedListener();
     playbackCache.cancel();
