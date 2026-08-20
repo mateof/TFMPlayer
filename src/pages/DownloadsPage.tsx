@@ -9,6 +9,7 @@ import { formatFileSize } from '@/utils/format';
 import { downloadManager, useDownloadStore } from '@/services/download/DownloadManager';
 import { useAudioPlayer } from '@/hooks/useAudioPlayer';
 import { useUiStore } from '@/stores/uiStore';
+import { useSettingsStore } from '@/stores/settingsStore';
 import type { CachedTrackEntity, DownloadQueueEntity } from '@/db/database';
 import type { Track } from '@/types/models';
 
@@ -31,7 +32,47 @@ export function DownloadsPage() {
   const isProcessing = useDownloadStore((state) => state.isProcessing);
   const { play, playNext } = useAudioPlayer();
   const { addToast } = useUiStore();
+  const { downloadFormat, downloadBitrate } = useSettingsStore();
   const [contextMenuTrack, setContextMenuTrack] = useState<Track | null>(null);
+
+  // Cached tracks whose stored audio isn't in the configured offline format.
+  // Only counted once analysis has recorded what each file actually is.
+  const mismatchedTracks = downloadFormat === 'original'
+    ? []
+    : cachedTracks.filter(
+        t => t.audioFormat && t.audioFormat.toLowerCase() !== downloadFormat
+      );
+
+  const handleConvertMismatched = async () => {
+    if (mismatchedTracks.length === 0) return;
+    if (!confirm(
+      `Re-download ${mismatchedTracks.length} track(s) in ${downloadFormat.toUpperCase()} ${downloadBitrate}k?\n\n` +
+      'The current copies stay available until each new one arrives.'
+    )) return;
+
+    const tracks: Track[] = mismatchedTracks.map(t => ({
+      fileId: t.id,
+      messageId: 0,
+      channelId: t.channelId || '',
+      channelName: t.channelName || '',
+      fileName: t.fileName,
+      filePath: '',
+      fileType: 'Audio' as const,
+      fileSize: t.fileSize,
+      order: 0,
+      dateAdded: t.cachedAt.toISOString(),
+      isLocalFile: (t.streamUrl || '').includes('/stream/local'),
+      streamUrl: t.streamUrl || '',
+      title: t.title,
+      artist: t.artist,
+      album: t.album,
+      duration: t.duration
+    }));
+
+    await downloadManager.addMultipleToQueue(tracks, true);
+    addToast(`${tracks.length} track(s) queued for re-download`, 'success');
+    setActiveTab('queue');
+  };
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -256,6 +297,18 @@ export function DownloadsPage() {
           )}
         </div>
       </div>
+
+      {/* Offer to re-fetch anything not in the configured offline format */}
+      {mismatchedTracks.length > 0 && !isAnalyzing && (
+        <div className="px-4 py-2 bg-amber-500/10 border-b border-amber-500/20 flex items-center gap-3">
+          <p className="text-sm text-amber-300 flex-1">
+            {mismatchedTracks.length} track(s) are not in {downloadFormat.toUpperCase()}
+          </p>
+          <Button variant="ghost" size="sm" onClick={handleConvertMismatched}>
+            Re-download
+          </Button>
+        </div>
+      )}
 
       {/* Analysis progress */}
       {isAnalyzing && (
@@ -543,6 +596,14 @@ function CachedTracksList({ tracks, onDelete, onPlay, onLongPress }: CachedTrack
             </p>
             <p className="text-xs text-slate-400 truncate">
               {track.artist || track.channelName} • {formatFileSize(track.fileSize)}
+              {/* Actual codec of the stored file, so a transcode that didn't
+                  happen is visible instead of hidden behind the original name */}
+              {track.audioFormat && (
+                <span className="ml-1 text-emerald-400">
+                  • {track.audioFormat}
+                  {track.audioBitrate ? ` ${track.audioBitrate}k` : ''}
+                </span>
+              )}
             </p>
           </div>
           <div

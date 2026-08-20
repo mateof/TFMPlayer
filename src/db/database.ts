@@ -27,6 +27,11 @@ export interface CachedTrackEntity {
   coverArt?: string; // Base64 data URL for album art
   metadataExtracted?: boolean; // Flag to indicate metadata has been analyzed
   autoCached?: boolean; // Cached automatically while streaming (evictable), vs manual download
+  // What the stored blob actually is, read back from the file itself rather
+  // than from what we asked the server for (e.g. 'AAC', 'MP3') plus its
+  // bitrate in kbps. Makes a failed transcode visible instead of silent.
+  audioFormat?: string;
+  audioBitrate?: number;
 }
 
 export interface OfflinePlaylistEntity {

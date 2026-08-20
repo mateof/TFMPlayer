@@ -2,6 +2,7 @@ import { db, type DownloadQueueEntity } from '@/db/database';
 import { cacheService } from '@/services/cache/CacheService';
 import { apiClient, buildTranscodedUrlSync, buildLocalTranscodedUrlSync } from '@/services/api/client';
 import { useSettingsStore } from '@/stores/settingsStore';
+import { useUiStore } from '@/stores/uiStore';
 import type { Track } from '@/types/models';
 import { create } from 'zustand';
 import * as mm from 'music-metadata';
@@ -55,6 +56,8 @@ class DownloadManager {
     album?: string;
     duration?: number;
     coverArt?: string;
+    audioFormat?: string;
+    audioBitrate?: number;
   }> {
     try {
       const buffer = await blob.arrayBuffer();
@@ -76,12 +79,49 @@ class DownloadManager {
         artist: metadata.common.artist,
         album: metadata.common.album,
         duration: metadata.format.duration,
-        coverArt
+        coverArt,
+        audioFormat: this.formatLabel(metadata.format.container, metadata.format.codec),
+        audioBitrate: metadata.format.bitrate
+          ? Math.round(metadata.format.bitrate / 1000)
+          : undefined
       };
     } catch (error) {
       console.warn('Failed to extract metadata:', error);
       return {};
     }
+  }
+
+  // Short, human-readable codec label from what the file actually contains
+  private formatLabel(container?: string, codec?: string): string | undefined {
+    const value = `${codec ?? ''} ${container ?? ''}`.toUpperCase();
+    if (!value.trim()) return undefined;
+    if (value.includes('AAC')) return 'AAC';
+    if (value.includes('LAYER 3') || value.includes('MP3')) return 'MP3';
+    if (value.includes('FLAC')) return 'FLAC';
+    if (value.includes('OPUS')) return 'OPUS';
+    if (value.includes('VORBIS')) return 'OGG';
+    if (value.includes('PCM') || value.includes('WAVE')) return 'WAV';
+    if (value.includes('ALAC')) return 'ALAC';
+    return (codec || container)!.split(/[\s/]/)[0].slice(0, 8).toUpperCase();
+  }
+
+  // Surface a failed transcode in the UI, but only once per session so a
+  // 200-track playlist doesn't produce 200 toasts
+  private transcodeWarningShown = false;
+
+  private warnTranscodeUnavailable(status: number): void {
+    if (this.transcodeWarningShown) return;
+    this.transcodeWarningShown = true;
+
+    const reason = status === 501
+      ? 'the server has no FFmpeg'
+      : status === 404
+        ? 'the server does not support it for this source'
+        : `the server answered ${status}`;
+    useUiStore.getState().addToast(
+      `Downloading in original format: transcoding failed because ${reason}`,
+      'warning'
+    );
   }
 
   // Recover the local-directory path from a /stream/local?path=... URL
@@ -101,13 +141,16 @@ class DownloadManager {
     return btoa(binary);
   }
 
-  // Add track to download queue
-  async addToQueue(track: Track): Promise<void> {
-    // Check if already cached
-    const isCached = await cacheService.isTrackCached(track.fileId);
-    if (isCached) {
-      console.log('Track already cached:', track.fileName);
-      return;
+  // Add track to download queue. `force` re-downloads a track that is already
+  // cached (used to re-fetch in a newly configured format); the existing blob
+  // is kept until the new one replaces it.
+  async addToQueue(track: Track, force = false): Promise<void> {
+    if (!force) {
+      const isCached = await cacheService.isTrackCached(track.fileId);
+      if (isCached) {
+        console.log('Track already cached:', track.fileName);
+        return;
+      }
     }
 
     // Check if already in queue
@@ -153,10 +196,10 @@ class DownloadManager {
   }
 
   // Add multiple tracks to queue
-  async addMultipleToQueue(tracks: Track[]): Promise<void> {
+  async addMultipleToQueue(tracks: Track[], force = false): Promise<void> {
     console.log(`Adding ${tracks.length} tracks to download queue...`);
     for (const track of tracks) {
-      await this.addToQueue(track);
+      await this.addToQueue(track, force);
     }
     // Ensure queue processing starts after all items are added
     console.log('All tracks added, ensuring queue processing...');
@@ -320,9 +363,12 @@ class DownloadManager {
         }
       });
 
-      // Transcoding unavailable (e.g. no FFmpeg on the server): fall back to original
+      // Transcoding unavailable (e.g. no FFmpeg on the server): fall back to
+      // original. Tell the user once per session — silently downloading a
+      // different format than the one configured is impossible to notice.
       if (!response.ok && response.status !== 206 && transcoded) {
         console.warn(`Transcoded download failed (HTTP ${response.status}), falling back to original format`);
+        this.warnTranscodeUnavailable(response.status);
         transcoded = false;
         downloadUrl = item.streamUrl;
         response = await fetch(downloadUrl, {
@@ -383,7 +429,9 @@ class DownloadManager {
           album: metadata.album,
           duration: metadata.duration,
           coverArt: metadata.coverArt,
-          metadataExtracted: true
+          metadataExtracted: true,
+          audioFormat: metadata.audioFormat,
+          audioBitrate: metadata.audioBitrate
         });
 
         await db.downloadQueue.delete(item.id!);
@@ -559,11 +607,12 @@ class DownloadManager {
     await db.downloadQueue.clear();
   }
 
-  // Analyze existing cached tracks that don't have metadata extracted
+  // Analyze existing cached tracks that don't have metadata extracted.
+  // Also picks up tracks analyzed before audioFormat was recorded, so an
+  // existing library can be checked for what it actually holds.
   async analyzeExistingTracks(onProgress?: (current: number, total: number) => void): Promise<number> {
-    // Get all tracks that haven't been analyzed yet
     const tracksToAnalyze = await db.cachedTracks
-      .filter(track => !track.metadataExtracted)
+      .filter(track => !track.metadataExtracted || !track.audioFormat)
       .toArray();
 
     if (tracksToAnalyze.length === 0) {
@@ -590,7 +639,9 @@ class DownloadManager {
           album: metadata.album || track.album,
           duration: metadata.duration || track.duration,
           coverArt: metadata.coverArt || track.coverArt,
-          metadataExtracted: true
+          metadataExtracted: true,
+          audioFormat: metadata.audioFormat || track.audioFormat,
+          audioBitrate: metadata.audioBitrate || track.audioBitrate
         });
 
         analyzedCount++;
@@ -613,7 +664,7 @@ class DownloadManager {
   // Get count of tracks pending analysis
   async getPendingAnalysisCount(): Promise<number> {
     return db.cachedTracks
-      .filter(track => !track.metadataExtracted)
+      .filter(track => !track.metadataExtracted || !track.audioFormat)
       .count();
   }
 }
