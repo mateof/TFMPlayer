@@ -154,6 +154,24 @@ export function buildTranscodedUrlSync(
   return `${baseUrl}/api/mobile/stream/tfm/${channelId}/${fileId}/transcoded?${params.toString()}`;
 }
 
+// Transcoded download URL for files in the server's local directory. Same
+// contract as the channel one (auth via X-API-Key header).
+export function buildLocalTranscodedUrlSync(
+  filePath: string,
+  format: string,
+  bitrate: number
+): string {
+  const baseUrl = apiClient.getBaseUrl();
+  if (!baseUrl) {
+    console.warn('buildLocalTranscodedUrlSync called before API client initialized');
+  }
+  const params = new URLSearchParams();
+  params.set('path', filePath);
+  params.set('format', format);
+  params.set('bitrate', String(bitrate));
+  return `${baseUrl}/api/mobile/stream/local/transcoded?${params.toString()}`;
+}
+
 // Synchronous version that requires baseUrl to be pre-initialized
 export function buildStreamUrlSync(channelId: string, fileId: string, fileName?: string): string {
   const baseUrl = apiClient.getBaseUrl();

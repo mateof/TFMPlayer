@@ -45,6 +45,9 @@ export interface DownloadQueueEntity {
   trackId: string;
   streamUrl: string;
   fileName: string;
+  // Path within the server's local directory (local files only); needed to
+  // request a transcoded copy. Not indexed, so no schema bump required.
+  filePath?: string;
   channelId: string;
   channelName: string;
   fileSize: number;

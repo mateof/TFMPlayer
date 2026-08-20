@@ -1,6 +1,6 @@
 import { db, type DownloadQueueEntity } from '@/db/database';
 import { cacheService } from '@/services/cache/CacheService';
-import { apiClient, buildTranscodedUrlSync } from '@/services/api/client';
+import { apiClient, buildTranscodedUrlSync, buildLocalTranscodedUrlSync } from '@/services/api/client';
 import { useSettingsStore } from '@/stores/settingsStore';
 import type { Track } from '@/types/models';
 import { create } from 'zustand';
@@ -84,6 +84,13 @@ class DownloadManager {
     }
   }
 
+  // Recover the local-directory path from a /stream/local?path=... URL
+  private extractLocalPath(streamUrl: string): string | undefined {
+    const query = streamUrl.split('?')[1];
+    if (!query) return undefined;
+    return new URLSearchParams(query).get('path') ?? undefined;
+  }
+
   // Helper to convert array buffer to base64
   private arrayBufferToBase64(buffer: Uint8Array): string {
     let binary = '';
@@ -115,6 +122,7 @@ class DownloadManager {
         status: 'pending',
         progress: 0,
         streamUrl: track.streamUrl, // Update in case URL changed (http->https)
+        filePath: track.filePath,
         errorMessage: undefined
       });
       console.log('Track reset in queue:', track.fileName);
@@ -129,6 +137,7 @@ class DownloadManager {
       trackId: track.fileId,
       streamUrl: track.streamUrl,
       fileName: track.fileName,
+      filePath: track.filePath,
       channelId: track.channelId,
       channelName: track.channelName,
       fileSize: track.fileSize,
@@ -217,9 +226,11 @@ class DownloadManager {
   // Download file in chunks when server returns partial content
   private async downloadInChunks(
     item: DownloadQueueEntity,
+    downloadUrl: string,
     apiKey: string,
     totalSize: number,
-    signal: AbortSignal
+    signal: AbortSignal,
+    blobType: string
   ): Promise<Blob> {
     const CHUNK_SIZE = 2 * 1024 * 1024; // 2MB chunks (matching server's chunk size)
     const chunks: BlobPart[] = [];
@@ -235,7 +246,7 @@ class DownloadManager {
 
       console.log(`Downloading chunk: ${rangeHeader}`);
 
-      const response = await fetch(item.streamUrl, {
+      const response = await fetch(downloadUrl, {
         signal,
         headers: {
           'X-API-Key': apiKey,
@@ -259,7 +270,7 @@ class DownloadManager {
       console.log(`Downloaded ${downloaded} / ${totalSize} bytes (${progress}%)`);
     }
 
-    return new Blob(chunks, { type: 'audio/mpeg' });
+    return new Blob(chunks, { type: blobType });
   }
 
   // Download a single item
@@ -275,19 +286,30 @@ class DownloadManager {
       const apiKey = await apiClient.getApiKey();
 
       // Offline format setting: download transcoded (MP3/AAC) instead of the
-      // original when configured and the file isn't already in that format
+      // original when configured and the file isn't already in that format.
+      // Channel files and local files have separate transcoding endpoints.
       const { downloadFormat, downloadBitrate } = useSettingsStore.getState();
       const extension = item.fileName.split('.').pop()?.toLowerCase() ?? '';
       const alreadyTargetFormat =
         extension === downloadFormat ||
         (downloadFormat === 'aac' && (extension === 'aac' || extension === 'm4a'));
+
+      const isChannelFile = item.streamUrl.includes('/stream/tfm/');
+      const isLocalFile = item.streamUrl.includes('/stream/local');
+      // Items queued before filePath was stored still carry it in the URL
+      const localPath = item.filePath ?? this.extractLocalPath(item.streamUrl);
+
       let transcoded =
         downloadFormat !== 'original' &&
         !alreadyTargetFormat &&
-        item.streamUrl.includes('/stream/tfm/');
-      let downloadUrl = transcoded
-        ? buildTranscodedUrlSync(item.channelId, item.trackId, downloadFormat, downloadBitrate, item.fileName)
-        : item.streamUrl;
+        (isChannelFile || (isLocalFile && !!localPath));
+
+      let downloadUrl = item.streamUrl;
+      if (transcoded) {
+        downloadUrl = isChannelFile
+          ? buildTranscodedUrlSync(item.channelId, item.trackId, downloadFormat, downloadBitrate, item.fileName)
+          : buildLocalTranscodedUrlSync(localPath!, downloadFormat, downloadBitrate);
+      }
 
       // First request to check file size and if server returns partial content
       let response = await fetch(downloadUrl, {
@@ -339,7 +361,9 @@ class DownloadManager {
       // If server returns partial content, fetch in chunks
       if (contentRange && contentLength && parseInt(contentLength) < totalSize) {
         console.log('Server returned partial content. Downloading in chunks...');
-        const blob = await this.downloadInChunks(item, apiKey, totalSize, abortController.signal);
+        const blob = await this.downloadInChunks(
+          item, downloadUrl, apiKey, totalSize, abortController.signal, blobType
+        );
 
         // Extract metadata from the downloaded file
         console.log('Extracting metadata for:', item.fileName);
