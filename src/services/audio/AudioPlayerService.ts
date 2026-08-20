@@ -66,6 +66,15 @@ class AudioPlayerService {
   private preloaded: { trackId: string; blob: Blob | null; url: string | null } | null = null;
   private preloadAttemptedFor: string | null = null;
 
+  // End-guard state. On Android, the 'ended' event makes Chrome release
+  // audio focus and tear down the media session; after that, play() from a
+  // hidden page is rejected, so auto-advance dies with the screen off.
+  // The guard sets audio.loop whenever a follow-up track exists — 'ended'
+  // then never fires — and detects the loop wrap (position jumping back to
+  // the start) to advance while sound is still coming out of the element.
+  private lastTimeupdatePos = 0;
+  private seekSuppressUntil = 0;
+
   // Web Audio API for visualizer (lazy initialization)
   // Uses captureStream() to analyze audio WITHOUT affecting playback quality
   private audioContext: AudioContext | null = null;
@@ -477,6 +486,7 @@ class AudioPlayerService {
     });
 
     this.audio.addEventListener('timeupdate', () => {
+      this.handleEndGuard();
       store().setPosition(this.audio.currentTime);
       this.updateBufferedRanges();
       this.maybePreloadNext();
@@ -731,6 +741,46 @@ class AudioPlayerService {
     return { blob, url };
   }
 
+  // Keep audio.loop in sync with "is there something to play next", and turn
+  // the loop wrap into the track change. While the wrap plays the start of
+  // the old track for a fraction of a second, the element never stops
+  // sounding, so the media session/audio focus survive and the swap to the
+  // next source is allowed even with the screen off.
+  private handleEndGuard(): void {
+    const pos = this.audio.currentTime;
+    const prev = this.lastTimeupdatePos;
+    this.lastTimeupdatePos = pos;
+
+    const duration = this.audio.duration;
+    if (!Number.isFinite(duration) || duration <= 0) return;
+
+    const { queue, currentIndex, repeatMode, shuffle } = usePlayerStore.getState();
+    const hasFollowUp =
+      repeatMode === 'one' ||
+      repeatMode === 'all' ||
+      (shuffle && queue.length > 1) ||
+      currentIndex < queue.length - 1;
+
+    if (this.audio.loop !== hasFollowUp) {
+      this.audio.loop = hasFollowUp;
+    }
+
+    // Detect the loop wrap: a large backwards jump not caused by a seek.
+    // repeat-one needs no handling — the native loop IS the repeat.
+    if (!hasFollowUp || repeatMode === 'one' || this.transitioning) return;
+    if (Date.now() < this.seekSuppressUntil) return;
+
+    const wrapped =
+      (prev > duration - 10 && pos < 3 && prev - pos > 2) ||
+      prev - pos > Math.max(10, duration * 0.5);
+    if (wrapped) {
+      console.log('End-guard: loop wrap detected, advancing to next track');
+      // Block re-triggering from further timeupdates while next() resolves
+      this.transitioning = true;
+      this.next().catch(() => {});
+    }
+  }
+
   async play(track: Track, queue?: Track[], startIndex?: number): Promise<void> {
     const store = usePlayerStore.getState();
 
@@ -777,6 +827,10 @@ class AudioPlayerService {
       this.playbackIntent = true;
       this.audio.src = url;
       this.audio.volume = store.volume;
+      // Fresh source: reset end-guard tracking so the position drop from the
+      // old track isn't read as a loop wrap
+      this.lastTimeupdatePos = 0;
+      this.seekSuppressUntil = Date.now() + 2000;
 
       // Safe now that the element no longer references it
       if (staleBlobUrl) URL.revokeObjectURL(staleBlobUrl);
@@ -875,6 +929,8 @@ class AudioPlayerService {
   seek(position: number): void {
     try {
       if (this.audio.duration && isFinite(position) && isFinite(this.audio.duration)) {
+        // A deliberate seek must not be mistaken for the end-guard loop wrap
+        this.seekSuppressUntil = Date.now() + 2000;
         const newPosition = Math.max(0, Math.min(position, this.audio.duration));
         console.log('Seeking to:', newPosition, 'of', this.audio.duration);
 
@@ -1103,8 +1159,10 @@ class AudioPlayerService {
 
   stop(): void {
     this.audio.pause();
+    this.audio.loop = false;
     this.audio.currentTime = 0;
     this.audio.src = '';
+    this.lastTimeupdatePos = 0;
     this.revokeBlobUrl();
     this.cachedBlobForCurrentTrack = null;
     this.pendingAutoPlay = false;
