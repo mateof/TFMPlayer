@@ -276,7 +276,7 @@ export function PlayerPage() {
       {/* Playlist Picker Modal */}
       {showPlaylistPicker && currentTrack && (
         <PlaylistPicker
-          track={currentTrack}
+          tracks={[currentTrack]}
           onClose={() => setShowPlaylistPicker(false)}
         />
       )}

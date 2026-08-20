@@ -899,7 +899,7 @@ export function PlayerOverlay() {
       {/* Playlist Picker Modal */}
       {showPlaylistPicker && currentTrack && (
         <PlaylistPicker
-          track={currentTrack}
+          tracks={[currentTrack]}
           onClose={() => setShowPlaylistPicker(false)}
         />
       )}

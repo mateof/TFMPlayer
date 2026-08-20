@@ -1,17 +1,19 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useSearchParams, useLocation } from 'react-router-dom';
-import { Music, Folder, Play, Plus, ChevronRight, Download, Search, SlidersHorizontal, X, Loader2, Check, HardDrive } from 'lucide-react';
+import { Music, Folder, Play, Plus, ChevronRight, Download, Search, SlidersHorizontal, X, Loader2, Check, HardDrive, CheckCircle2, Circle } from 'lucide-react';
 import { Header } from '@/components/layout/Header';
 import { LoadingScreen } from '@/components/common/Spinner';
 import { PlaylistPicker } from '@/components/playlists/PlaylistPicker';
-import { TrackContextMenu } from '@/components/common/TrackContextMenu';
+import { SelectionBar } from '@/components/common/SelectionBar';
 import { localFilesApi } from '@/services/api/localFiles.api';
 import { useAudioPlayer } from '@/hooks/useAudioPlayer';
 import { useDebounce } from '@/hooks/useDebounce';
+import { useMultiSelect } from '@/hooks/useMultiSelect';
 import { useUiStore } from '@/stores/uiStore';
 import { formatFileSize } from '@/utils/format';
 import { downloadManager, useDownloadStore } from '@/services/download/DownloadManager';
 import { cacheService } from '@/services/cache/CacheService';
+import { collectLocalFolderTracks, dedupeTracks, localFileToTrack, MAX_SELECTION_TRACKS } from '@/utils/collectTracks';
 import type { ChannelFile, Track } from '@/types/models';
 
 const PAGE_SIZE = 50;
@@ -27,22 +29,11 @@ const categoryIcons: Record<string, React.ReactNode> = {
 // Convert ChannelFile to Track for local files
 async function fileToTrack(file: ChannelFile): Promise<Track> {
   const streamUrl = await localFilesApi.getStreamUrl(file.path);
-  return {
-    fileId: file.id,
-    messageId: 0,
-    channelId: 'local',
-    channelName: 'Local Files',
-    fileName: file.name,
-    filePath: file.path,
-    fileType: file.type,
-    fileSize: file.size,
-    order: 0,
-    dateAdded: file.dateCreated,
-    isLocalFile: true,
-    streamUrl: streamUrl,
-    title: file.name.replace(/\.[^/.]+$/, '')
-  };
+  return { ...localFileToTrack(file), streamUrl };
 }
+
+// Folders and files come from different id spaces, so key selections by both
+const fileKey = (file: ChannelFile) => `${file.category}:${file.id}`;
 
 export function LocalFilesPage() {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -65,9 +56,13 @@ export function LocalFilesPage() {
   const [files, setFiles] = useState<ChannelFile[]>([]);
   const [currentPath, setCurrentPath] = useState('');
   const [folderPath, setFolderPath] = useState<FolderBreadcrumb[]>([]);
-  const [selectedTrack, setSelectedTrack] = useState<Track | null>(null);
+  const [pickerTracks, setPickerTracks] = useState<Track[] | null>(null);
   const [cachedTrackIds, setCachedTrackIds] = useState<Set<string>>(new Set());
-  const [contextMenuTrack, setContextMenuTrack] = useState<Track | null>(null);
+
+  // Multi-selection (long press to start)
+  const selection = useMultiSelect<ChannelFile>(fileKey);
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const [bulkLabel, setBulkLabel] = useState('');
 
   // Long press refs
   const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -358,6 +353,11 @@ export function LocalFilesPage() {
   }, [handleScroll]);
 
   const handleFileClick = (file: ChannelFile) => {
+    // While selecting, a tap toggles instead of playing/navigating
+    if (selection.selectionMode) {
+      selection.toggle(file);
+      return;
+    }
     if (file.category === 'Folder') {
       const newPath = [...folderPath, { path: file.path, name: file.name }];
       const params = new URLSearchParams(searchParams);
@@ -406,8 +406,71 @@ export function LocalFilesPage() {
   const handleAddToPlaylist = async (file: ChannelFile, e: React.MouseEvent) => {
     e.stopPropagation();
     const track = await fileToTrack(file);
-    setSelectedTrack(track);
+    setPickerTracks([track]);
   };
+
+  // Expand the current selection into tracks, walking any selected folder
+  const buildSelectedTracks = async (): Promise<Track[]> => {
+    const selectedFiles = files.filter((f) => selection.selectedKeys.has(fileKey(f)));
+    const collected: Track[] = [];
+
+    for (const file of selectedFiles) {
+      if (file.category === 'Audio') {
+        collected.push(localFileToTrack(file));
+      } else if (file.category === 'Folder') {
+        setBulkLabel(`Scanning "${file.name}"...`);
+        const folderTracks = await collectLocalFolderTracks(file.path, (found) =>
+          setBulkLabel(`Scanning "${file.name}" - ${found} tracks found`)
+        );
+        collected.push(...folderTracks);
+      }
+    }
+
+    return dedupeTracks(collected);
+  };
+
+  // Run a bulk action over the selection, showing progress while folders expand
+  const withSelectedTracks = async (action: (tracks: Track[]) => void | Promise<void>) => {
+    setBulkBusy(true);
+    setBulkLabel('Preparing...');
+    try {
+      const tracks = await buildSelectedTracks();
+      if (tracks.length === 0) {
+        addToast('No audio in the selection', 'info');
+        return;
+      }
+      if (tracks.length >= MAX_SELECTION_TRACKS) {
+        addToast(`Selection capped at the first ${MAX_SELECTION_TRACKS} tracks`, 'warning');
+      }
+      await action(tracks);
+    } catch (error) {
+      console.error('Bulk action failed:', error);
+      addToast('Could not complete the action', 'error');
+    } finally {
+      setBulkBusy(false);
+      setBulkLabel('');
+    }
+  };
+
+  const handleBulkAddToPlaylist = () =>
+    withSelectedTracks((tracks) => setPickerTracks(tracks));
+
+  const handleBulkDownload = () =>
+    withSelectedTracks(async (tracks) => {
+      await downloadManager.addMultipleToQueue(tracks);
+      addToast(`${tracks.length} track(s) queued for download`, 'success');
+      selection.exitSelection();
+    });
+
+  const handleBulkPlayNext = () =>
+    withSelectedTracks((tracks) => {
+      // Insert backwards so the selection keeps its order in the queue
+      for (let i = tracks.length - 1; i >= 0; i--) {
+        playNext(tracks[i]);
+      }
+      addToast(`${tracks.length} track(s) will play next`, 'success');
+      selection.exitSelection();
+    });
 
   const handleDownload = async (file: ChannelFile, e: React.MouseEvent) => {
     e.stopPropagation();
@@ -416,9 +479,9 @@ export function LocalFilesPage() {
     addToast('Added to download queue', 'info');
   };
 
-  // Long press handlers
-  const handleLongPressStart = async (file: ChannelFile, e: React.TouchEvent | React.MouseEvent) => {
-    if (file.category !== 'Audio') return;
+  // Long press enters multi-selection mode (works for audio and folders)
+  const handleLongPressStart = (file: ChannelFile, e: React.TouchEvent | React.MouseEvent) => {
+    if (selection.selectionMode) return;
 
     longPressTriggeredRef.current = false;
 
@@ -426,11 +489,9 @@ export function LocalFilesPage() {
       longPressStartPosRef.current = { x: e.touches[0].clientX, y: e.touches[0].clientY };
     }
 
-    const track = await fileToTrack(file);
-
     longPressTimerRef.current = setTimeout(() => {
       longPressTriggeredRef.current = true;
-      setContextMenuTrack(track);
+      selection.startWith(file);
     }, 500);
   };
 
@@ -456,11 +517,6 @@ export function LocalFilesPage() {
       longPressTimerRef.current = null;
     }
     longPressStartPosRef.current = null;
-  };
-
-  const handlePlayNext = (track: Track) => {
-    playNext(track);
-    addToast(`"${track.title || track.fileName}" will play next`, 'info');
   };
 
   const filterOptions: { key: FilterMode; label: string; group?: string }[] = [
@@ -496,7 +552,22 @@ export function LocalFilesPage() {
         backPath="/channels?tab=local"
       />
 
-      {/* Toolbar */}
+      {/* Selection bar replaces the toolbar while selecting */}
+      {selection.selectionMode ? (
+        <SelectionBar
+          count={selection.selectedCount}
+          total={files.length}
+          busy={bulkBusy}
+          busyLabel={bulkLabel}
+          onSelectAll={() => selection.selectAll(files)}
+          onDeselectAll={selection.deselectAll}
+          onAddToPlaylist={handleBulkAddToPlaylist}
+          onDownload={handleBulkDownload}
+          onPlayNext={handleBulkPlayNext}
+          onCancel={selection.exitSelection}
+        />
+      ) : (
+      /* Toolbar */
       <div className="flex items-center gap-2 px-4 py-2 bg-slate-800 border-b border-slate-700">
         {/* Search toggle */}
         <button
@@ -530,9 +601,10 @@ export function LocalFilesPage() {
           Play All
         </button>
       </div>
+      )}
 
       {/* Search bar */}
-      {showSearch && (
+      {showSearch && !selection.selectionMode && (
         <div className="flex items-center gap-2 px-4 py-2 bg-slate-800 border-b border-slate-700">
           <Search className="w-5 h-5 text-slate-400" />
           <input
@@ -552,7 +624,7 @@ export function LocalFilesPage() {
       )}
 
       {/* Filters panel */}
-      {showFilters && (
+      {showFilters && !selection.selectionMode && (
         <div className="px-4 py-3 bg-slate-800 border-b border-slate-700 space-y-3">
           {/* Filter mode - General */}
           <div>
@@ -660,11 +732,16 @@ export function LocalFilesPage() {
         ) : (
           <>
             <div className="divide-y divide-slate-700">
-              {files.map((file) => (
+              {files.map((file) => {
+                const selected = selection.isSelected(file);
+                return (
                 <div
                   key={`${file.category}-${file.id}`}
                   onClick={() => {
-                    if (longPressTriggeredRef.current) return;
+                    if (longPressTriggeredRef.current) {
+                      longPressTriggeredRef.current = false;
+                      return;
+                    }
                     handleFileClick(file);
                   }}
                   onTouchStart={(e) => handleLongPressStart(file, e)}
@@ -673,8 +750,19 @@ export function LocalFilesPage() {
                   onMouseDown={(e) => handleLongPressStart(file, e)}
                   onMouseUp={handleLongPressEnd}
                   onMouseLeave={handleLongPressEnd}
-                  className="w-full flex items-center gap-4 p-4 hover:bg-slate-800 transition-colors touch-manipulation text-left cursor-pointer"
+                  className={`w-full flex items-center gap-4 p-4 transition-colors touch-manipulation text-left cursor-pointer select-none ${
+                    selected ? 'bg-emerald-500/15' : 'hover:bg-slate-800'
+                  }`}
                 >
+                  {selection.selectionMode && (
+                    <div className="flex-shrink-0 text-emerald-400">
+                      {selected ? (
+                        <CheckCircle2 className="w-5 h-5" />
+                      ) : (
+                        <Circle className="w-5 h-5 text-slate-500" />
+                      )}
+                    </div>
+                  )}
                   <div
                     className={`w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0 relative ${
                       file.category === 'Folder'
@@ -696,7 +784,7 @@ export function LocalFilesPage() {
                       {file.category !== 'Folder' && formatFileSize(file.size)}
                     </p>
                   </div>
-                  {file.category === 'Audio' && (
+                  {file.category === 'Audio' && !selection.selectionMode && (
                     <>
                       {!cachedTrackIds.has(file.id) && (
                         activeDownloads.has(file.id) ? (
@@ -722,11 +810,12 @@ export function LocalFilesPage() {
                       </button>
                     </>
                   )}
-                  {file.category === 'Folder' && (
+                  {file.category === 'Folder' && !selection.selectionMode && (
                     <ChevronRight className="w-5 h-5 text-slate-500" />
                   )}
                 </div>
-              ))}
+                );
+              })}
             </div>
 
             {/* Loading more indicator */}
@@ -745,20 +834,12 @@ export function LocalFilesPage() {
         )}
       </div>
 
-      {/* Playlist Picker Modal */}
-      {selectedTrack && (
+      {/* Playlist Picker Modal (one track or a whole selection) */}
+      {pickerTracks && (
         <PlaylistPicker
-          track={selectedTrack}
-          onClose={() => setSelectedTrack(null)}
-        />
-      )}
-
-      {/* Context Menu */}
-      {contextMenuTrack && (
-        <TrackContextMenu
-          track={contextMenuTrack}
-          onClose={() => setContextMenuTrack(null)}
-          onPlayNext={handlePlayNext}
+          tracks={pickerTracks}
+          onClose={() => setPickerTracks(null)}
+          onAdded={selection.exitSelection}
         />
       )}
     </div>

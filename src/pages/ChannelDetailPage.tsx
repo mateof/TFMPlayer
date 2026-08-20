@@ -1,17 +1,19 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useParams, useSearchParams, useLocation } from 'react-router-dom';
-import { Music, Folder, Play, Plus, ChevronRight, Download, Search, SlidersHorizontal, X, Loader2, Check } from 'lucide-react';
+import { Music, Folder, Play, Plus, ChevronRight, Download, Search, SlidersHorizontal, X, Loader2, Check, CheckCircle2, Circle } from 'lucide-react';
 import { Header } from '@/components/layout/Header';
 import { LoadingScreen } from '@/components/common/Spinner';
 import { PlaylistPicker } from '@/components/playlists/PlaylistPicker';
-import { TrackContextMenu } from '@/components/common/TrackContextMenu';
+import { SelectionBar } from '@/components/common/SelectionBar';
 import { channelsApi } from '@/services/api/channels.api';
 import { useAudioPlayer } from '@/hooks/useAudioPlayer';
 import { useDebounce } from '@/hooks/useDebounce';
+import { useMultiSelect } from '@/hooks/useMultiSelect';
 import { useUiStore } from '@/stores/uiStore';
 import { usePlayerStore } from '@/stores/playerStore';
 import { formatFileSize } from '@/utils/format';
 import { fileToTrack, filterFilesByExtension, getApiFilter } from '@/utils/channelTracks';
+import { collectChannelFolderTracks, dedupeTracks, MAX_SELECTION_TRACKS } from '@/utils/collectTracks';
 import { downloadManager, useDownloadStore } from '@/services/download/DownloadManager';
 import { cacheService } from '@/services/cache/CacheService';
 import type { ChannelDetail, ChannelFile, Track } from '@/types/models';
@@ -31,6 +33,9 @@ interface FolderBreadcrumb {
   name: string;
 }
 
+// Folders and files come from different id spaces, so key selections by both
+const fileKey = (file: ChannelFile) => `${file.category}:${file.id}`;
+
 export function ChannelDetailPage() {
   const { id } = useParams<{ id: string }>();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -47,9 +52,13 @@ export function ChannelDetailPage() {
   const [channel, setChannel] = useState<ChannelDetail | null>(null);
   const [files, setFiles] = useState<ChannelFile[]>([]);
   const [folderPath, setFolderPath] = useState<FolderBreadcrumb[]>([]);
-  const [selectedTrack, setSelectedTrack] = useState<Track | null>(null);
-  const [contextMenuTrack, setContextMenuTrack] = useState<Track | null>(null);
+  const [pickerTracks, setPickerTracks] = useState<Track[] | null>(null);
   const [cachedTrackIds, setCachedTrackIds] = useState<Set<string>>(new Set());
+
+  // Multi-selection (long press to start)
+  const selection = useMultiSelect<ChannelFile>(fileKey);
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const [bulkLabel, setBulkLabel] = useState('');
 
   // Long press state
   const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -344,6 +353,11 @@ export function ChannelDetailPage() {
       longPressTriggeredRef.current = false;
       return;
     }
+    // While selecting, a tap toggles instead of playing/navigating
+    if (selection.selectionMode) {
+      selection.toggle(file);
+      return;
+    }
     if (file.category === 'Folder') {
       const newPath = [...folderPath, { id: file.id, name: file.name }];
       const params = new URLSearchParams(searchParams);
@@ -355,9 +369,9 @@ export function ChannelDetailPage() {
     }
   };
 
-  // Long press handlers for audio files
+  // Long press enters multi-selection mode (works for audio and folders)
   const handleLongPressStart = (file: ChannelFile, e: React.TouchEvent | React.MouseEvent) => {
-    if (file.category !== 'Audio') return;
+    if (selection.selectionMode) return;
     longPressTriggeredRef.current = false;
 
     if ('touches' in e) {
@@ -366,8 +380,7 @@ export function ChannelDetailPage() {
 
     longPressTimerRef.current = setTimeout(() => {
       longPressTriggeredRef.current = true;
-      const track = fileToTrack(file, id!, channel?.name || '');
-      setContextMenuTrack(track);
+      selection.startWith(file);
     }, 500);
   };
 
@@ -392,10 +405,71 @@ export function ChannelDetailPage() {
     touchStartPosRef.current = null;
   };
 
-  const handlePlayNext = (track: Track) => {
-    playNext(track);
-    addToast(`"${track.title || track.fileName}" will play next`, 'info');
+  // Expand the current selection into tracks, walking any selected folder
+  const buildSelectedTracks = async (): Promise<Track[]> => {
+    const selectedFiles = files.filter((f) => selection.selectedKeys.has(fileKey(f)));
+    const collected: Track[] = [];
+
+    for (const file of selectedFiles) {
+      if (file.category === 'Audio') {
+        collected.push(fileToTrack(file, id!, channel?.name || ''));
+      } else if (file.category === 'Folder') {
+        setBulkLabel(`Scanning "${file.name}"...`);
+        const folderTracks = await collectChannelFolderTracks(
+          id!,
+          channel?.name || '',
+          file.id,
+          (found) => setBulkLabel(`Scanning "${file.name}" - ${found} tracks found`)
+        );
+        collected.push(...folderTracks);
+      }
+    }
+
+    return dedupeTracks(collected);
   };
+
+  // Run a bulk action over the selection, showing progress while folders expand
+  const withSelectedTracks = async (action: (tracks: Track[]) => void | Promise<void>) => {
+    setBulkBusy(true);
+    setBulkLabel('Preparing...');
+    try {
+      const tracks = await buildSelectedTracks();
+      if (tracks.length === 0) {
+        addToast('No audio in the selection', 'info');
+        return;
+      }
+      if (tracks.length >= MAX_SELECTION_TRACKS) {
+        addToast(`Selection capped at the first ${MAX_SELECTION_TRACKS} tracks`, 'warning');
+      }
+      await action(tracks);
+    } catch (error) {
+      console.error('Bulk action failed:', error);
+      addToast('Could not complete the action', 'error');
+    } finally {
+      setBulkBusy(false);
+      setBulkLabel('');
+    }
+  };
+
+  const handleBulkAddToPlaylist = () =>
+    withSelectedTracks((tracks) => setPickerTracks(tracks));
+
+  const handleBulkDownload = () =>
+    withSelectedTracks(async (tracks) => {
+      await downloadManager.addMultipleToQueue(tracks);
+      addToast(`${tracks.length} track(s) queued for download`, 'success');
+      selection.exitSelection();
+    });
+
+  const handleBulkPlayNext = () =>
+    withSelectedTracks((tracks) => {
+      // Insert backwards so the selection keeps its order in the queue
+      for (let i = tracks.length - 1; i >= 0; i--) {
+        playNext(tracks[i]);
+      }
+      addToast(`${tracks.length} track(s) will play next`, 'success');
+      selection.exitSelection();
+    });
 
   const navigateToFolder = (index: number) => {
     const params = new URLSearchParams(searchParams);
@@ -458,7 +532,7 @@ export function ChannelDetailPage() {
     e.stopPropagation();
     if (!channel) return;
     const track = fileToTrack(file, id!, channel.name);
-    setSelectedTrack(track);
+    setPickerTracks([track]);
   };
 
   const handleDownload = async (file: ChannelFile, e: React.MouseEvent) => {
@@ -500,7 +574,22 @@ export function ChannelDetailPage() {
         backPath="/channels"
       />
 
-      {/* Toolbar */}
+      {/* Selection bar replaces the toolbar while selecting */}
+      {selection.selectionMode ? (
+        <SelectionBar
+          count={selection.selectedCount}
+          total={files.length}
+          busy={bulkBusy}
+          busyLabel={bulkLabel}
+          onSelectAll={() => selection.selectAll(files)}
+          onDeselectAll={selection.deselectAll}
+          onAddToPlaylist={handleBulkAddToPlaylist}
+          onDownload={handleBulkDownload}
+          onPlayNext={handleBulkPlayNext}
+          onCancel={selection.exitSelection}
+        />
+      ) : (
+      /* Toolbar */
       <div className="flex items-center gap-2 px-4 py-2 bg-slate-800 border-b border-slate-700">
         {/* Search toggle */}
         <button
@@ -534,9 +623,10 @@ export function ChannelDetailPage() {
           Play All
         </button>
       </div>
+      )}
 
       {/* Search bar */}
-      {showSearch && (
+      {showSearch && !selection.selectionMode && (
         <div className="flex items-center gap-2 px-4 py-2 bg-slate-800 border-b border-slate-700">
           <Search className="w-5 h-5 text-slate-400" />
           <input
@@ -556,7 +646,7 @@ export function ChannelDetailPage() {
       )}
 
       {/* Filters panel */}
-      {showFilters && (
+      {showFilters && !selection.selectionMode && (
         <div className="px-4 py-3 bg-slate-800 border-b border-slate-700 space-y-3">
           {/* Filter mode - General */}
           <div>
@@ -663,7 +753,9 @@ export function ChannelDetailPage() {
         ) : (
           <>
             <div className="divide-y divide-slate-700">
-              {files.map((file) => (
+              {files.map((file) => {
+                const selected = selection.isSelected(file);
+                return (
                 <div
                   key={`${file.category}-${file.id}`}
                   onClick={() => handleFileClick(file)}
@@ -673,8 +765,19 @@ export function ChannelDetailPage() {
                   onMouseDown={(e) => handleLongPressStart(file, e)}
                   onMouseUp={handleLongPressEnd}
                   onMouseLeave={handleLongPressEnd}
-                  className="w-full flex items-center gap-4 p-4 hover:bg-slate-800 transition-colors touch-manipulation text-left cursor-pointer select-none"
+                  className={`w-full flex items-center gap-4 p-4 transition-colors touch-manipulation text-left cursor-pointer select-none ${
+                    selected ? 'bg-emerald-500/15' : 'hover:bg-slate-800'
+                  }`}
                 >
+                  {selection.selectionMode && (
+                    <div className="flex-shrink-0 text-emerald-400">
+                      {selected ? (
+                        <CheckCircle2 className="w-5 h-5" />
+                      ) : (
+                        <Circle className="w-5 h-5 text-slate-500" />
+                      )}
+                    </div>
+                  )}
                   <div
                     className={`w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0 relative ${
                       file.category === 'Folder'
@@ -696,7 +799,7 @@ export function ChannelDetailPage() {
                       {file.category !== 'Folder' && formatFileSize(file.size)}
                     </p>
                   </div>
-                  {file.category === 'Audio' && (
+                  {file.category === 'Audio' && !selection.selectionMode && (
                     <>
                       {!cachedTrackIds.has(file.id) && (
                         activeDownloads.has(file.id) ? (
@@ -722,11 +825,12 @@ export function ChannelDetailPage() {
                       </button>
                     </>
                   )}
-                  {file.category === 'Folder' && (
+                  {file.category === 'Folder' && !selection.selectionMode && (
                     <ChevronRight className="w-5 h-5 text-slate-500" />
                   )}
                 </div>
-              ))}
+                );
+              })}
             </div>
 
             {/* Loading more indicator */}
@@ -745,20 +849,12 @@ export function ChannelDetailPage() {
         )}
       </div>
 
-      {/* Playlist Picker Modal */}
-      {selectedTrack && (
+      {/* Playlist Picker Modal (one track or a whole selection) */}
+      {pickerTracks && (
         <PlaylistPicker
-          track={selectedTrack}
-          onClose={() => setSelectedTrack(null)}
-        />
-      )}
-
-      {/* Track Context Menu */}
-      {contextMenuTrack && (
-        <TrackContextMenu
-          track={contextMenuTrack}
-          onClose={() => setContextMenuTrack(null)}
-          onPlayNext={handlePlayNext}
+          tracks={pickerTracks}
+          onClose={() => setPickerTracks(null)}
+          onAdded={selection.exitSelection}
         />
       )}
     </div>

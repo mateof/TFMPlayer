@@ -1,3 +1,4 @@
+import { isAxiosError } from 'axios';
 import { apiClient, buildStreamUrlSync, buildLocalStreamUrlSync } from './client';
 import type {
   Playlist,
@@ -85,6 +86,37 @@ export const playlistsApi = {
   async addTrack(playlistId: string, track: AddTrackRequest): Promise<void> {
     const client = await apiClient.getClient();
     await client.post(`/api/mobile/playlists/${playlistId}/tracks`, track);
+  },
+
+  // Add many tracks in one go. The server has no bulk endpoint, so they go
+  // one by one; a 409 means the track was already there, which is a skip
+  // rather than a failure.
+  async addTracks(
+    playlistId: string,
+    tracks: AddTrackRequest[],
+    onProgress?: (done: number, total: number) => void
+  ): Promise<{ added: number; duplicates: number; failed: number }> {
+    const client = await apiClient.getClient();
+    let added = 0;
+    let duplicates = 0;
+    let failed = 0;
+
+    for (let i = 0; i < tracks.length; i++) {
+      try {
+        await client.post(`/api/mobile/playlists/${playlistId}/tracks`, tracks[i]);
+        added++;
+      } catch (error) {
+        if (isAxiosError(error) && error.response?.status === 409) {
+          duplicates++;
+        } else {
+          failed++;
+          console.warn('Failed to add track to playlist:', error);
+        }
+      }
+      onProgress?.(i + 1, tracks.length);
+    }
+
+    return { added, duplicates, failed };
   },
 
   async removeTrack(playlistId: string, fileId: string): Promise<void> {

@@ -1,6 +1,5 @@
 import { useState, useEffect } from 'react';
-import { isAxiosError } from 'axios';
-import { X, Plus, Music, Check, CloudOff } from 'lucide-react';
+import { X, Plus, Music, Check, CloudOff, ListMusic } from 'lucide-react';
 import { Button } from '@/components/common/Button';
 import { Input } from '@/components/common/Input';
 import { Spinner } from '@/components/common/Spinner';
@@ -12,11 +11,14 @@ import { cacheService } from '@/services/cache/CacheService';
 import type { Track, Playlist } from '@/types/models';
 
 interface PlaylistPickerProps {
-  track: Track;
+  // One or many tracks; a multi-selection adds them all in order
+  tracks: Track[];
   onClose: () => void;
+  // Called after a successful add (used to leave selection mode)
+  onAdded?: () => void;
 }
 
-export function PlaylistPicker({ track, onClose }: PlaylistPickerProps) {
+export function PlaylistPicker({ tracks, onClose, onAdded }: PlaylistPickerProps) {
   const { addToast } = useUiStore();
   const [loading, setLoading] = useState(true);
   const [playlists, setPlaylists] = useState<Playlist[]>([]);
@@ -25,6 +27,10 @@ export function PlaylistPicker({ track, onClose }: PlaylistPickerProps) {
   const [newPlaylistName, setNewPlaylistName] = useState('');
   const [creating, setCreating] = useState(false);
   const [addingTo, setAddingTo] = useState<string | null>(null);
+  const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
+
+  const isMultiple = tracks.length > 1;
+  const firstTrack = tracks[0];
 
   useEffect(() => {
     loadPlaylists();
@@ -51,54 +57,80 @@ export function PlaylistPicker({ track, onClose }: PlaylistPickerProps) {
     }
   };
 
-  const handleAddToPlaylist = async (playlistId: string) => {
-    setAddingTo(playlistId);
-    try {
-      await playlistsApi.addTrack(playlistId, track);
-
-      // If playlist is offline, auto-download the track
-      if (offlinePlaylistIds.has(playlistId)) {
-        const isCached = await cacheService.isTrackCached(track.fileId);
-        if (!isCached) {
-          await downloadManager.addToQueue(track);
-          addToast('Track added and queued for download', 'success');
-        } else {
-          addToast('Track added to offline playlist', 'success');
-        }
-      } else {
-        addToast('Track added to playlist', 'success');
+  // Queue for download every track that isn't cached yet (offline playlists)
+  const queueMissingDownloads = async (): Promise<number> => {
+    let queued = 0;
+    for (const track of tracks) {
+      if (!(await cacheService.isTrackCached(track.fileId))) {
+        await downloadManager.addToQueue(track);
+        queued++;
       }
+    }
+    return queued;
+  };
+
+  const reportResult = async (
+    playlistName: string,
+    playlistId: string | null,
+    result: { added: number; duplicates: number; failed: number }
+  ) => {
+    const parts: string[] = [];
+    if (result.added > 0) {
+      parts.push(`${result.added} track${result.added === 1 ? '' : 's'} added`);
+    }
+    if (result.duplicates > 0) parts.push(`${result.duplicates} already there`);
+    if (result.failed > 0) parts.push(`${result.failed} failed`);
+
+    // Offline playlists pull in the audio too
+    if (result.added > 0 && playlistId && offlinePlaylistIds.has(playlistId)) {
+      const queued = await queueMissingDownloads();
+      if (queued > 0) parts.push(`${queued} queued for download`);
+    }
+
+    const summary = parts.length > 0 ? parts.join(', ') : 'Nothing to add';
+    const tone = result.added > 0 ? 'success' : result.failed > 0 ? 'error' : 'info';
+    addToast(`${playlistName}: ${summary}`, tone);
+  };
+
+  const handleAddToPlaylist = async (playlistId: string, playlistName: string) => {
+    setAddingTo(playlistId);
+    setProgress({ done: 0, total: tracks.length });
+    try {
+      const result = await playlistsApi.addTracks(playlistId, tracks, (done, total) =>
+        setProgress({ done, total })
+      );
+      await reportResult(playlistName, playlistId, result);
+      onAdded?.();
       onClose();
     } catch (error) {
-      // Server returns 409 Conflict when the track is already in the playlist
-      if (isAxiosError(error) && error.response?.status === 409) {
-        addToast('This track is already in that playlist', 'info');
-      } else {
-        addToast('Failed to add track', 'error');
-        console.error(error);
-      }
+      addToast('Failed to add tracks', 'error');
+      console.error(error);
     } finally {
       setAddingTo(null);
+      setProgress(null);
     }
   };
 
   const handleCreateAndAdd = async () => {
     if (!newPlaylistName.trim()) return;
 
+    const name = newPlaylistName.trim();
     setCreating(true);
+    setProgress({ done: 0, total: tracks.length });
     try {
-      const newPlaylist = await playlistsApi.create({
-        name: newPlaylistName.trim(),
-        description: ''
-      });
-      await playlistsApi.addTrack(newPlaylist.id, track);
-      addToast(`Added to "${newPlaylistName}"`, 'success');
+      const newPlaylist = await playlistsApi.create({ name, description: '' });
+      const result = await playlistsApi.addTracks(newPlaylist.id, tracks, (done, total) =>
+        setProgress({ done, total })
+      );
+      await reportResult(name, null, result);
+      onAdded?.();
       onClose();
     } catch (error) {
       addToast('Failed to create playlist', 'error');
       console.error(error);
     } finally {
       setCreating(false);
+      setProgress(null);
     }
   };
 
@@ -123,20 +155,51 @@ export function PlaylistPicker({ track, onClose }: PlaylistPickerProps) {
           </button>
         </div>
 
-        {/* Track info */}
+        {/* What is being added */}
         <div className="p-4 bg-slate-700/50 flex items-center gap-3">
           <div className="w-10 h-10 bg-slate-600 rounded flex items-center justify-center">
-            <Music className="w-5 h-5 text-slate-400" />
+            {isMultiple ? (
+              <ListMusic className="w-5 h-5 text-emerald-400" />
+            ) : (
+              <Music className="w-5 h-5 text-slate-400" />
+            )}
           </div>
           <div className="flex-1 min-w-0">
-            <p className="text-sm text-white truncate">
-              {track.title || track.fileName}
-            </p>
-            <p className="text-xs text-slate-400 truncate">
-              {track.artist || track.channelName}
-            </p>
+            {isMultiple ? (
+              <>
+                <p className="text-sm text-white">{tracks.length} tracks selected</p>
+                <p className="text-xs text-slate-400 truncate">
+                  {firstTrack.title || firstTrack.fileName} and {tracks.length - 1} more
+                </p>
+              </>
+            ) : (
+              <>
+                <p className="text-sm text-white truncate">
+                  {firstTrack.title || firstTrack.fileName}
+                </p>
+                <p className="text-xs text-slate-400 truncate">
+                  {firstTrack.artist || firstTrack.channelName}
+                </p>
+              </>
+            )}
           </div>
         </div>
+
+        {/* Progress while adding a large selection */}
+        {progress && progress.total > 1 && (
+          <div className="px-4 py-2 bg-slate-700/30">
+            <div className="flex items-center justify-between text-xs text-emerald-400 mb-1">
+              <span>Adding tracks...</span>
+              <span className="tabular-nums">{progress.done}/{progress.total}</span>
+            </div>
+            <div className="h-1 bg-slate-600 rounded-full overflow-hidden">
+              <div
+                className="h-full bg-emerald-500 transition-all"
+                style={{ width: `${(progress.done / progress.total) * 100}%` }}
+              />
+            </div>
+          </div>
+        )}
 
         {/* Content */}
         <div className="max-h-[40vh] overflow-y-auto">
@@ -171,7 +234,11 @@ export function PlaylistPicker({ track, onClose }: PlaylistPickerProps) {
                       disabled={creating || !newPlaylistName.trim()}
                       className="flex-1"
                     >
-                      {creating ? 'Creating...' : 'Create & Add'}
+                      {creating
+                        ? 'Creating...'
+                        : isMultiple
+                          ? `Create & Add ${tracks.length}`
+                          : 'Create & Add'}
                     </Button>
                   </div>
                 </div>
@@ -198,8 +265,8 @@ export function PlaylistPicker({ track, onClose }: PlaylistPickerProps) {
                   return (
                     <button
                       key={playlist.id}
-                      onClick={() => handleAddToPlaylist(playlist.id)}
-                      disabled={addingTo !== null}
+                      onClick={() => handleAddToPlaylist(playlist.id, playlist.name)}
+                      disabled={addingTo !== null || creating}
                       className="w-full flex items-center gap-3 p-3 rounded-lg hover:bg-slate-700 transition-colors text-left disabled:opacity-50"
                     >
                       <div className="w-10 h-10 bg-slate-700 rounded-lg flex items-center justify-center relative">
