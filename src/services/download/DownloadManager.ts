@@ -195,20 +195,67 @@ class DownloadManager {
     this.processQueue();
   }
 
-  // Add multiple tracks to queue
+  // Add multiple tracks to queue. Bulk version of addToQueue: one cache
+  // lookup, one queue lookup and one write transaction for the whole batch
+  // (a 2000-track folder used to cost thousands of IndexedDB round trips).
   async addMultipleToQueue(tracks: Track[], force = false): Promise<void> {
-    console.log(`Adding ${tracks.length} tracks to download queue...`);
+    if (tracks.length === 0) return;
+
+    // Same track twice in the batch: keep the first
+    const unique = new Map<string, Track>();
     for (const track of tracks) {
-      await this.addToQueue(track, force);
+      if (!unique.has(track.fileId)) unique.set(track.fileId, track);
     }
-    // Ensure queue processing starts after all items are added
-    console.log('All tracks added, ensuring queue processing...');
-    // Small delay to allow any current processing to finish checking
-    setTimeout(() => {
-      if (!this.isProcessing) {
-        this.processQueue();
+
+    const ids = [...unique.keys()];
+    const cached = force ? new Set<string>() : await cacheService.getCachedTrackIds(ids);
+    const wanted = ids.filter((id) => !cached.has(id)).map((id) => unique.get(id)!);
+    if (wanted.length === 0) return;
+
+    await db.transaction('rw', db.downloadQueue, async () => {
+      const existing = await db.downloadQueue
+        .where('trackId')
+        .anyOf(wanted.map((t) => t.fileId))
+        .toArray();
+      const existingByTrack = new Map(existing.map((item) => [item.trackId, item]));
+
+      const updates: DownloadQueueEntity[] = [];
+      const additions: Omit<DownloadQueueEntity, 'id'>[] = [];
+      for (const track of wanted) {
+        const item = existingByTrack.get(track.fileId);
+        if (item) {
+          // Reset and refresh the URL in case it changed (http -> https)
+          updates.push({
+            ...item,
+            status: 'pending',
+            progress: 0,
+            streamUrl: track.streamUrl,
+            filePath: track.filePath,
+            errorMessage: undefined
+          });
+        } else {
+          additions.push({
+            trackId: track.fileId,
+            streamUrl: track.streamUrl,
+            fileName: track.fileName,
+            filePath: track.filePath,
+            channelId: track.channelId,
+            channelName: track.channelName,
+            fileSize: track.fileSize,
+            status: 'pending',
+            progress: 0,
+            addedAt: new Date()
+          });
+        }
       }
-    }, 100);
+      if (updates.length > 0) await db.downloadQueue.bulkPut(updates);
+      if (additions.length > 0) await db.downloadQueue.bulkAdd(additions as DownloadQueueEntity[]);
+    });
+
+    console.log(`Queued ${wanted.length} of ${tracks.length} tracks for download`);
+    if (!this.isProcessing) {
+      this.processQueue();
+    }
   }
 
   // Process the download queue

@@ -1,5 +1,6 @@
 import { isAxiosError } from 'axios';
 import { apiClient, buildStreamUrlSync, buildLocalStreamUrlSync } from './client';
+import { serverCapabilities } from '@/services/server/capabilities';
 import type {
   Playlist,
   PlaylistDetail,
@@ -46,6 +47,25 @@ function ensureStreamUrl(track: Track): Track {
   return track;
 }
 
+// Tracks per bulk request: keeps each body small and gives progress feedback
+const BULK_CHUNK_SIZE = 500;
+
+// Callers often pass whole Track objects: send only what the server reads
+function toAddTrackRequest(track: AddTrackRequest): AddTrackRequest {
+  return {
+    fileId: track.fileId,
+    channelId: track.channelId,
+    fileName: track.fileName,
+    fileSize: track.fileSize,
+    streamUrl: track.streamUrl,
+    isLocalFile: track.isLocalFile,
+    filePath: track.filePath,
+    channelName: track.channelName,
+    fileType: track.fileType,
+    directUrl: track.directUrl || undefined
+  };
+}
+
 export const playlistsApi = {
   async getAll(): Promise<Playlist[]> {
     const client = await apiClient.getClient();
@@ -88,10 +108,64 @@ export const playlistsApi = {
     await client.post(`/api/mobile/playlists/${playlistId}/tracks`, track);
   },
 
-  // Add many tracks in one go. The server has no bulk endpoint, so they go
-  // one by one; a 409 means the track was already there, which is a skip
-  // rather than a failure.
+  /**
+   * Add many tracks in one go. Servers advertising `playlist.bulkAdd` take
+   * them in a few requests (POST .../tracks/bulk); older ones get them one by
+   * one. Either way duplicates are skips, not failures.
+   */
   async addTracks(
+    playlistId: string,
+    tracks: AddTrackRequest[],
+    onProgress?: (done: number, total: number) => void
+  ): Promise<{ added: number; duplicates: number; failed: number }> {
+    if (tracks.length > 1 && (await serverCapabilities.has('playlist.bulkAdd'))) {
+      const result = await this.addTracksBulk(playlistId, tracks, onProgress);
+      if (result) return result;
+      // The endpoint was not there after all: carry on one by one
+    }
+    return this.addTracksOneByOne(playlistId, tracks, onProgress);
+  },
+
+  /** Bulk path. Null when the server turns out not to support it. */
+  async addTracksBulk(
+    playlistId: string,
+    tracks: AddTrackRequest[],
+    onProgress?: (done: number, total: number) => void
+  ): Promise<{ added: number; duplicates: number; failed: number } | null> {
+    const client = await apiClient.getClient();
+    let added = 0;
+    let duplicates = 0;
+    let failed = 0;
+
+    for (let start = 0; start < tracks.length; start += BULK_CHUNK_SIZE) {
+      const chunk = tracks.slice(start, start + BULK_CHUNK_SIZE);
+      try {
+        const { data } = await client.post<ApiResult<{ added: number; skipped: number; total: number }>>(
+          `/api/mobile/playlists/${playlistId}/tracks/bulk`,
+          { tracks: chunk.map(toAddTrackRequest) },
+          // A big chunk is one Mongo update but may take a moment
+          { timeout: 30000 }
+        );
+        added += data.data.added;
+        duplicates += data.data.skipped;
+      } catch (error) {
+        const status = isAxiosError(error) ? error.response?.status : undefined;
+        if (start === 0 && (status === 404 || status === 405)) {
+          // 404 here may also mean "playlist not found": the one-by-one
+          // path reports that properly
+          serverCapabilities.markUnavailable('playlist.bulkAdd');
+          return null;
+        }
+        failed += chunk.length;
+        console.warn('Bulk add to playlist failed for a chunk:', error);
+      }
+      onProgress?.(Math.min(start + chunk.length, tracks.length), tracks.length);
+    }
+
+    return { added, duplicates, failed };
+  },
+
+  async addTracksOneByOne(
     playlistId: string,
     tracks: AddTrackRequest[],
     onProgress?: (done: number, total: number) => void
@@ -103,7 +177,7 @@ export const playlistsApi = {
 
     for (let i = 0; i < tracks.length; i++) {
       try {
-        await client.post(`/api/mobile/playlists/${playlistId}/tracks`, tracks[i]);
+        await client.post(`/api/mobile/playlists/${playlistId}/tracks`, toAddTrackRequest(tracks[i]));
         added++;
       } catch (error) {
         if (isAxiosError(error) && error.response?.status === 409) {

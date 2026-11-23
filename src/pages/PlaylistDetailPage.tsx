@@ -1,4 +1,5 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, useLayoutEffect } from 'react';
+import { useVirtualizer } from '@tanstack/react-virtual';
 import { useParams } from 'react-router-dom';
 import { Play, Shuffle, Download, Music, Trash2, Check, CloudOff, Cloud, WifiOff, GripVertical, ChevronUp } from 'lucide-react';
 import { Header } from '@/components/layout/Header';
@@ -7,6 +8,7 @@ import { LoadingScreen } from '@/components/common/Spinner';
 import { TrackContextMenu } from '@/components/common/TrackContextMenu';
 import { playlistsApi } from '@/services/api/playlists.api';
 import { useAudioPlayer } from '@/hooks/useAudioPlayer';
+import { useLongPress } from '@/hooks/useLongPress';
 import { useUiStore } from '@/stores/uiStore';
 import { formatDuration, formatFileSize } from '@/utils/format';
 import { downloadManager, useDownloadStore } from '@/services/download/DownloadManager';
@@ -45,10 +47,8 @@ export function PlaylistDetailPage() {
   const [showScrollTop, setShowScrollTop] = useState(false);
   const [contextMenuTrack, setContextMenuTrack] = useState<Track | null>(null);
 
-  // Long press state
-  const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const longPressTriggeredRef = useRef(false);
-  const touchStartPosRef = useRef<{ x: number; y: number } | null>(null);
+  // Long press opens the track menu
+  const longPress = useLongPress<Track>(useCallback((track: Track) => setContextMenuTrack(track), []));
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const headerInfoRef = useRef<HTMLDivElement>(null);
 
@@ -74,6 +74,24 @@ export function PlaylistDetailPage() {
     container.addEventListener('scroll', handleScroll, { passive: true });
     return () => container.removeEventListener('scroll', handleScroll);
   }, [loading]);
+
+  // Only the visible rows are rendered: big playlists (thousands of tracks)
+  // used to build every row up front
+  const trackListRef = useRef<HTMLDivElement>(null);
+  const [trackListOffset, setTrackListOffset] = useState(0);
+  useLayoutEffect(() => {
+    // Rows start below the playlist header, inside the same scroller (made
+    // `relative` so it is the offsetParent); banners shift that start
+    const offset = trackListRef.current?.offsetTop ?? 0;
+    if (offset !== trackListOffset) setTrackListOffset(offset);
+  }, [trackListOffset, loading, playlist, isOfflineMode, syncing, isOffline]);
+  const trackVirtualizer = useVirtualizer({
+    count: playlist?.tracks.length ?? 0,
+    getScrollElement: () => scrollContainerRef.current,
+    estimateSize: () => 73,
+    overscan: 10,
+    scrollMargin: trackListOffset
+  });
 
   const scrollToTop = useCallback(() => {
     scrollContainerRef.current?.scrollTo({ top: 0, behavior: 'smooth' });
@@ -176,15 +194,14 @@ export function PlaylistDetailPage() {
         // Save updated playlist
         await saveOfflinePlaylist(id!, data.name, data.description, data.tracks);
 
-        // Queue new tracks for download
+        // Queue new tracks for download (one bulk cache lookup)
         if (newTracks.length > 0) {
-          for (const track of newTracks) {
-            const isCached = await cacheService.isTrackCached(track.fileId);
-            if (!isCached) {
-              await downloadManager.addToQueue(track);
-            }
+          const cached = await cacheService.getCachedTrackIds(newTracks.map(t => t.fileId));
+          const missing = newTracks.filter(t => !cached.has(t.fileId));
+          if (missing.length > 0) {
+            await downloadManager.addMultipleToQueue(missing);
+            addToast(`${missing.length} new track(s) queued for download`, 'info');
           }
-          addToast(`${newTracks.length} new track(s) queued for download`, 'info');
         }
       }
 
@@ -312,9 +329,7 @@ export function PlaylistDetailPage() {
         // Optionally remove cached tracks (ask user)
         const shouldRemoveTracks = confirm('Also remove downloaded tracks from cache?');
         if (shouldRemoveTracks) {
-          for (const track of playlist.tracks) {
-            await db.cachedTracks.delete(track.fileId);
-          }
+          await db.cachedTracks.bulkDelete(playlist.tracks.map(t => t.fileId));
           setCachedTrackIds(new Set());
         }
 
@@ -352,47 +367,55 @@ export function PlaylistDetailPage() {
   };
 
   const handlePlayTrack = (track: Track, index: number) => {
-    if (longPressTriggeredRef.current) {
-      longPressTriggeredRef.current = false;
-      return;
-    }
+    if (longPress.consumeLongPress()) return;
     if (!playlist) return;
     play(track, playlist.tracks, index);
   };
 
-  // Long press handlers
-  const handleLongPressStart = (track: Track, e: React.TouchEvent | React.MouseEvent) => {
-    longPressTriggeredRef.current = false;
-
-    if ('touches' in e) {
-      touchStartPosRef.current = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+  // Keyboard reordering (Alt+Up/Down), the accessible twin of drag and drop
+  const moveTrack = async (fromIndex: number, toIndex: number) => {
+    if (!playlist || isOfflineMode) return;
+    if (toIndex < 0 || toIndex >= playlist.tracks.length || fromIndex === toIndex) return;
+    const newTracks = [...playlist.tracks];
+    const [moved] = newTracks.splice(fromIndex, 1);
+    newTracks.splice(toIndex, 0, moved);
+    setPlaylist({ ...playlist, tracks: newTracks });
+    try {
+      await playlistsApi.reorderTracks(id!, newTracks.map(t => t.fileId));
+      if (isOffline) await saveOfflinePlaylist(id!, playlist.name, playlist.description, newTracks);
+    } catch (error) {
+      console.error('Failed to reorder tracks:', error);
+      addToast('Failed to save track order', 'error');
+      loadPlaylist();
     }
+  };
 
-    longPressTimerRef.current = setTimeout(() => {
-      longPressTriggeredRef.current = true;
+  const focusTrackRow = (index: number) => {
+    if (!playlist || index < 0 || index >= playlist.tracks.length) return;
+    trackVirtualizer.scrollToIndex(index, { align: 'auto' });
+    requestAnimationFrame(() => {
+      scrollContainerRef.current
+        ?.querySelector<HTMLElement>(`[data-track-index="${index}"]`)
+        ?.focus();
+    });
+  };
+
+  const handleTrackKeyDown = (track: Track, index: number, e: React.KeyboardEvent) => {
+    if (e.target !== e.currentTarget) return; // a button inside the row has focus
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      e.stopPropagation();
+      handlePlayTrack(track, index);
+    } else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      e.stopPropagation();
+      const target = e.key === 'ArrowDown' ? index + 1 : index - 1;
+      if (e.altKey) moveTrack(index, target);
+      focusTrackRow(target);
+    } else if (e.key === 'ContextMenu' || (e.shiftKey && e.key === 'F10')) {
+      e.preventDefault();
       setContextMenuTrack(track);
-    }, 500);
-  };
-
-  const handleLongPressMove = (e: React.TouchEvent) => {
-    if (touchStartPosRef.current && longPressTimerRef.current) {
-      const touch = e.touches[0];
-      const deltaX = Math.abs(touch.clientX - touchStartPosRef.current.x);
-      const deltaY = Math.abs(touch.clientY - touchStartPosRef.current.y);
-      if (deltaX > 10 || deltaY > 10) {
-        clearTimeout(longPressTimerRef.current);
-        longPressTimerRef.current = null;
-        touchStartPosRef.current = null;
-      }
     }
-  };
-
-  const handleLongPressEnd = () => {
-    if (longPressTimerRef.current) {
-      clearTimeout(longPressTimerRef.current);
-      longPressTimerRef.current = null;
-    }
-    touchStartPosRef.current = null;
   };
 
   const handlePlayNext = (track: Track) => {
@@ -452,7 +475,7 @@ export function PlaylistDetailPage() {
       <Header title={playlist.name} subtitle={playlist.description} showBack />
 
       {/* Scrollable content */}
-      <div ref={scrollContainerRef} className="flex-1 overflow-y-auto">
+      <div ref={scrollContainerRef} className="relative flex-1 overflow-y-auto">
         {/* Compact sticky header - appears when scrolled */}
         <div className={`sticky top-0 z-20 transition-all duration-200 ${isScrolled ? 'opacity-100 translate-y-0' : 'opacity-0 -translate-y-full pointer-events-none'}`}>
           <div className="bg-slate-900/95 backdrop-blur-sm border-b border-slate-700 px-4 py-2">
@@ -469,6 +492,7 @@ export function PlaylistDetailPage() {
               <button
                 onClick={handlePlayAll}
                 disabled={!playlist.tracks.length}
+                aria-label="Play all"
                 className="p-2 bg-emerald-500 hover:bg-emerald-600 disabled:opacity-50 disabled:cursor-not-allowed rounded-full transition-colors"
               >
                 <Play className="w-4 h-4 text-white" fill="currentColor" />
@@ -476,6 +500,7 @@ export function PlaylistDetailPage() {
               <button
                 onClick={handleShufflePlay}
                 disabled={!playlist.tracks.length}
+                aria-label="Shuffle play"
                 className="p-2 bg-slate-700 hover:bg-slate-600 disabled:opacity-50 disabled:cursor-not-allowed rounded-full transition-colors"
               >
                 <Shuffle className="w-4 h-4 text-white" />
@@ -483,6 +508,8 @@ export function PlaylistDetailPage() {
               <button
                 onClick={handleToggleOffline}
                 disabled={isOfflineMode || togglingOffline}
+                aria-label={isOffline ? 'Remove offline copy' : 'Save for offline'}
+                aria-pressed={isOffline}
                 className={`p-2 ${isOffline ? 'bg-emerald-500 hover:bg-emerald-600' : 'bg-slate-700 hover:bg-slate-600'} disabled:opacity-50 disabled:cursor-not-allowed rounded-full transition-colors`}
               >
                 {isOffline ? <CloudOff className="w-4 h-4 text-white" /> : <Cloud className="w-4 h-4 text-white" />}
@@ -569,27 +596,39 @@ export function PlaylistDetailPage() {
             <p className="text-sm mt-2">Add tracks from channels</p>
           </div>
         ) : (
-          <div className="divide-y divide-slate-700">
-            {playlist.tracks.map((track, index) => {
+          <div
+            ref={trackListRef}
+            role="list"
+            aria-label={`${playlist.tracks.length} tracks. Alt+arrows reorder, Shift+F10 opens options`}
+            className="relative"
+            style={{ height: trackVirtualizer.getTotalSize() }}
+          >
+            {trackVirtualizer.getVirtualItems().map((virtualRow) => {
+              const index = virtualRow.index;
+              const track = playlist.tracks[index];
               const isCurrentTrack = currentTrack?.fileId === track.fileId;
               const isCached = cachedTrackIds.has(track.fileId);
               const coverArt = coverArts[track.fileId];
               return (
                 <div
                   key={track.fileId}
+                  data-index={index}
+                  data-track-index={index}
+                  ref={trackVirtualizer.measureElement}
+                  role="listitem"
+                  tabIndex={0}
+                  aria-current={isCurrentTrack ? 'true' : undefined}
+                  aria-label={`${index + 1}. ${track.title || track.fileName}${isCached ? ', on device' : ''}`}
+                  onKeyDown={(e) => handleTrackKeyDown(track, index, e)}
+                  style={{ transform: `translateY(${virtualRow.start - trackVirtualizer.options.scrollMargin}px)` }}
                   draggable={!isOfflineMode}
-                  onDragStart={(e) => handleDragStart(e, index)}
                   onDragOver={(e) => handleDragOver(e, index)}
                   onDragLeave={handleDragLeave}
                   onDrop={(e) => handleDrop(e, index)}
                   onDragEnd={handleDragEnd}
-                  onTouchStart={(e) => handleLongPressStart(track, e)}
-                  onTouchMove={handleLongPressMove}
-                  onTouchEnd={handleLongPressEnd}
-                  onMouseDown={(e) => handleLongPressStart(track, e)}
-                  onMouseUp={handleLongPressEnd}
-                  onMouseLeave={handleLongPressEnd}
-                  className={`w-full flex items-center gap-3 p-4 transition-all touch-manipulation text-left select-none ${
+                  {...longPress.bind(track)}
+                  onDragStart={(e) => handleDragStart(e, index)}
+                  className={`absolute left-0 top-0 border-b border-slate-700 outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-emerald-400 w-full flex items-center gap-3 p-4 transition-all touch-manipulation text-left select-none ${
                     isCurrentTrack ? 'bg-emerald-500/10' : 'hover:bg-slate-800'
                   } ${draggedIndex === index ? 'opacity-50 scale-95' : ''} ${
                     dragOverIndex === index && draggedIndex !== index
@@ -649,19 +688,26 @@ export function PlaylistDetailPage() {
                     ) : (
                       <button
                         onClick={(e) => handleDownloadTrack(track, e)}
+                        onMouseDown={(e) => e.stopPropagation()}
+                        onTouchStart={(e) => e.stopPropagation()}
                         className="p-2 text-slate-500 hover:text-emerald-400 transition-colors"
                         title="Download"
+                        aria-label={`Download ${track.title || track.fileName}`}
                       >
-                        <Download className="w-4 h-4" />
+                        <Download className="w-4 h-4" aria-hidden />
                       </button>
                     )
                   )}
                   {!isOfflineMode && (
                     <button
                       onClick={(e) => handleRemoveTrack(track, e)}
+                      onMouseDown={(e) => e.stopPropagation()}
+                      onTouchStart={(e) => e.stopPropagation()}
                       className="p-2 text-slate-500 hover:text-red-400 transition-colors"
+                      aria-label={`Remove ${track.title || track.fileName} from the playlist`}
+                      title="Remove"
                     >
-                      <Trash2 className="w-4 h-4" />
+                      <Trash2 className="w-4 h-4" aria-hidden />
                     </button>
                   )}
                 </div>

@@ -28,7 +28,6 @@ export const localFilesApi = {
     });
 
     const data = response.data;
-    console.log('Local files API response:', data);
 
     // Handle different response structures
     let files: ChannelFile[] = [];

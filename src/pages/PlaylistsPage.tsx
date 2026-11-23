@@ -6,6 +6,7 @@ import { Button } from '@/components/common/Button';
 import { Input } from '@/components/common/Input';
 import { LoadingScreen } from '@/components/common/Spinner';
 import { playlistsApi } from '@/services/api/playlists.api';
+import { queryClient, queryKeys } from '@/services/query/queryClient';
 import { useUiStore } from '@/stores/uiStore';
 import {
   getAllOfflinePlaylists,
@@ -157,6 +158,7 @@ export function PlaylistsPage() {
 
       // Refresh from server to get the new playlist
       syncAttempted.current = false;
+      queryClient.invalidateQueries({ queryKey: queryKeys.playlists.all });
       loadPlaylists();
     } catch {
       addToast('Failed to create playlist', 'error');
@@ -179,6 +181,7 @@ export function PlaylistsPage() {
 
       // Update local state immediately
       setPlaylists(prev => prev.filter(p => p.id !== playlist.id));
+      queryClient.invalidateQueries({ queryKey: queryKeys.playlists.all });
       addToast('Playlist deleted', 'success');
     } catch {
       addToast('Failed to delete playlist', 'error');

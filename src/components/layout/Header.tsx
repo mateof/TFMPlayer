@@ -28,8 +28,9 @@ export function Header({ title, subtitle, showBack = false, backPath, actions }:
           <button
             onClick={handleBack}
             className="p-2 -ml-2 text-slate-400 hover:text-white transition-colors touch-manipulation"
+            aria-label="Back"
           >
-            <ArrowLeft className="w-5 h-5" />
+            <ArrowLeft className="w-5 h-5" aria-hidden />
           </button>
         )}
         <div className="flex-1 min-w-0">
@@ -58,8 +59,9 @@ export function HeaderAction({ icon, onClick, label, disabled }: HeaderActionPro
       disabled={disabled}
       className="p-2 text-slate-400 hover:text-white transition-colors touch-manipulation disabled:opacity-50 disabled:cursor-not-allowed"
       aria-label={label}
+      title={label}
     >
-      {icon || <MoreVertical className="w-5 h-5" />}
+      {icon || <MoreVertical className="w-5 h-5" aria-hidden />}
     </button>
   );
 }

@@ -49,6 +49,9 @@ export function TrackContextMenu({ track, onClose, onPlayNext, coverArt }: Track
     <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 animate-in fade-in duration-200">
       <div
         ref={menuRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label={`Options for ${track.title || track.fileName}`}
         className="w-full max-w-lg bg-slate-800 rounded-t-2xl overflow-hidden animate-in slide-in-from-bottom duration-300"
       >
         {/* Track info header */}
@@ -71,8 +74,9 @@ export function TrackContextMenu({ track, onClose, onPlayNext, coverArt }: Track
           <button
             onClick={onClose}
             className="p-2 text-slate-400 hover:text-white transition-colors"
+            aria-label="Close"
           >
-            <X className="w-5 h-5" />
+            <X className="w-5 h-5" aria-hidden />
           </button>
         </div>
 
@@ -97,72 +101,4 @@ export function TrackContextMenu({ track, onClose, onPlayNext, coverArt }: Track
       </div>
     </div>
   );
-}
-
-// Hook for long press detection
-export function useLongPress(
-  onLongPress: () => void,
-  onClick?: () => void,
-  { delay = 500 }: { delay?: number } = {}
-) {
-  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const isLongPressRef = useRef(false);
-  const startPosRef = useRef<{ x: number; y: number } | null>(null);
-
-  const start = (e: React.TouchEvent | React.MouseEvent) => {
-    isLongPressRef.current = false;
-
-    // Store start position for touch events
-    if ('touches' in e) {
-      startPosRef.current = { x: e.touches[0].clientX, y: e.touches[0].clientY };
-    }
-
-    timerRef.current = setTimeout(() => {
-      isLongPressRef.current = true;
-      onLongPress();
-    }, delay);
-  };
-
-  const move = (e: React.TouchEvent) => {
-    // Cancel long press if moved too much (scrolling)
-    if (startPosRef.current && timerRef.current) {
-      const touch = e.touches[0];
-      const deltaX = Math.abs(touch.clientX - startPosRef.current.x);
-      const deltaY = Math.abs(touch.clientY - startPosRef.current.y);
-
-      if (deltaX > 10 || deltaY > 10) {
-        clear();
-      }
-    }
-  };
-
-  const clear = () => {
-    if (timerRef.current) {
-      clearTimeout(timerRef.current);
-      timerRef.current = null;
-    }
-    startPosRef.current = null;
-  };
-
-  const end = (e: React.TouchEvent | React.MouseEvent) => {
-    clear();
-
-    // Only trigger click if it wasn't a long press
-    if (!isLongPressRef.current && onClick) {
-      // Prevent default to avoid double-firing on touch devices
-      if ('touches' in e) {
-        e.preventDefault();
-      }
-      onClick();
-    }
-  };
-
-  return {
-    onMouseDown: start,
-    onMouseUp: end,
-    onMouseLeave: clear,
-    onTouchStart: start,
-    onTouchMove: move,
-    onTouchEnd: end,
-  };
 }

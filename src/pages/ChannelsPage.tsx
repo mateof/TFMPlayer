@@ -2,11 +2,11 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Search, Star, Radio, FolderOpen, ChevronRight, HardDrive, X } from 'lucide-react';
 import { Header } from '@/components/layout/Header';
+import { ChannelAvatar } from '@/components/channels/ChannelAvatar';
 import { Input } from '@/components/common/Input';
 import { LoadingScreen } from '@/components/common/Spinner';
-import { channelsApi } from '@/services/api/channels.api';
 import { useUiStore } from '@/stores/uiStore';
-import { getApiCache, setApiCache } from '@/db/database';
+import { useChannelsQuery, useFavoriteChannelsQuery, useChannelFoldersQuery, useToggleFavoriteMutation } from '@/hooks/queries';
 import type { Channel, ChannelFolder } from '@/types/models';
 
 type Tab = 'all' | 'favorites' | 'folders' | 'local';
@@ -35,11 +35,26 @@ export function ChannelsPage() {
     setSearchParams(params, { replace: true });
   }, [searchParams, setSearchParams]);
   const [searchQuery, setSearchQuery] = useState('');
-  const [loading, setLoading] = useState(true);
-  const [channels, setChannels] = useState<Channel[]>([]);
-  const [favorites, setFavorites] = useState<Channel[]>([]);
-  const [folders, setFolders] = useState<ChannelFolder[]>([]);
-  const [ungroupedChannels, setUngroupedChannels] = useState<Channel[]>([]);
+
+  // Cached (persisted) lists render immediately; the server refresh happens
+  // in background and offline visits simply keep the last copy
+  const channelsQuery = useChannelsQuery();
+  const favoritesQuery = useFavoriteChannelsQuery();
+  const foldersQuery = useChannelFoldersQuery();
+  const toggleFavoriteMutation = useToggleFavoriteMutation();
+
+  const channels = channelsQuery.data ?? [];
+  const favorites = favoritesQuery.data ?? [];
+  const folders = foldersQuery.data?.folders ?? [];
+  const ungroupedChannels = foldersQuery.data?.ungroupedChannels ?? [];
+  const loading = channelsQuery.isPending;
+
+  // Only complain when there is nothing to show at all
+  useEffect(() => {
+    if (channelsQuery.isError && !channelsQuery.data) {
+      addToast('Failed to load channels', 'error');
+    }
+  }, [channelsQuery.isError, channelsQuery.data, addToast]);
 
   // Scroll state for compact header
   const [isScrolled, setIsScrolled] = useState(false);
@@ -67,72 +82,11 @@ export function ChannelsPage() {
     }
   }, [searchExpanded]);
 
-  useEffect(() => {
-    loadData();
-  }, []);
-
-  const loadData = async () => {
-    setLoading(true);
-
-    // Cache-first: render the lists from the last visit instantly, then
-    // refresh from the server in the background (offline navigation never
-    // waits for a network timeout)
-    const [cachedAll, cachedFav, cachedFolders] = await Promise.all([
-      getApiCache<Channel[]>('channels:all'),
-      getApiCache<Channel[]>('channels:favorites'),
-      getApiCache<{ folders: ChannelFolder[]; ungroupedChannels: Channel[] }>('channels:folders')
-    ]);
-
-    let renderedFromCache = false;
-    if (cachedAll?.length) {
-      setChannels(cachedAll);
-      setFavorites(cachedFav ?? []);
-      if (cachedFolders) {
-        setFolders(cachedFolders.folders);
-        setUngroupedChannels(cachedFolders.ungroupedChannels);
-      }
-      setLoading(false);
-      renderedFromCache = true;
-    }
-
-    try {
-      const [allChannels, favChannels, foldersData] = await Promise.all([
-        channelsApi.getAll(),
-        channelsApi.getFavorites(),
-        channelsApi.getFolders()
-      ]);
-
-      setChannels(allChannels);
-      setFavorites(favChannels);
-      setFolders(foldersData.folders);
-      setUngroupedChannels(foldersData.ungroupedChannels);
-
-      // Keep the lists available for offline visits
-      setApiCache('channels:all', allChannels).catch(() => {});
-      setApiCache('channels:favorites', favChannels).catch(() => {});
-      setApiCache('channels:folders', foldersData).catch(() => {});
-    } catch (error) {
-      if (!renderedFromCache) {
-        addToast('Failed to load channels', 'error');
-      }
-      console.error(error);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const toggleFavorite = async (channel: Channel, e: React.MouseEvent) => {
+  const toggleFavorite = (channel: Channel, e: React.MouseEvent) => {
     e.stopPropagation();
-    try {
-      if (channel.isFavorite) {
-        await channelsApi.removeFromFavorites(channel.id);
-      } else {
-        await channelsApi.addToFavorites(channel.id);
-      }
-      loadData();
-    } catch {
-      addToast('Failed to update favorite', 'error');
-    }
+    toggleFavoriteMutation.mutate(channel, {
+      onError: () => addToast('Failed to update favorite', 'error')
+    });
   };
 
   const filteredChannels = channels.filter((ch) =>
@@ -282,9 +236,7 @@ function ChannelList({ channels, onToggleFavorite, onSelect, emptyMessage }: Cha
           }}
           className="w-full flex items-center gap-4 p-4 hover:bg-slate-800 transition-colors touch-manipulation text-left cursor-pointer lg:rounded-xl lg:bg-slate-800/50 lg:border lg:border-slate-700/60"
         >
-          <div className="w-12 h-12 bg-slate-700 rounded-full flex items-center justify-center flex-shrink-0">
-            <Radio className="w-6 h-6 text-slate-400" />
-          </div>
+          <ChannelAvatar channelId={channel.id} name={channel.name} />
           <div className="flex-1 min-w-0">
             <p className="font-medium text-white truncate" title={channel.name}>{channel.name}</p>
             <p className="text-sm text-slate-400">
@@ -368,6 +320,7 @@ function FoldersList({ folders, ungroupedChannels, onSelectChannel }: FoldersLis
         <div key={folder.id}>
           <button
             onClick={() => toggleFolder(folder.id)}
+            aria-expanded={expandedFolders.has(folder.id)}
             className="w-full flex items-center gap-4 p-4 hover:bg-slate-800 transition-colors touch-manipulation"
           >
             <div className="w-12 h-12 bg-slate-700 rounded-lg flex items-center justify-center">
@@ -393,7 +346,7 @@ function FoldersList({ folders, ungroupedChannels, onSelectChannel }: FoldersLis
                   onClick={() => onSelectChannel(channel)}
                   className="w-full flex items-center gap-4 p-4 pl-8 hover:bg-slate-700 transition-colors touch-manipulation"
                 >
-                  <Radio className="w-5 h-5 text-slate-400" />
+                  <ChannelAvatar channelId={channel.id} name={channel.name} size="sm" />
                   <span className="flex-1 text-left text-white truncate">
                     {channel.name}
                   </span>
@@ -416,7 +369,7 @@ function FoldersList({ folders, ungroupedChannels, onSelectChannel }: FoldersLis
               onClick={() => onSelectChannel(channel)}
               className="w-full flex items-center gap-4 p-4 hover:bg-slate-800 transition-colors touch-manipulation"
             >
-              <Radio className="w-5 h-5 text-slate-400" />
+              <ChannelAvatar channelId={channel.id} name={channel.name} size="sm" />
               <span className="flex-1 text-left text-white truncate">
                 {channel.name}
               </span>

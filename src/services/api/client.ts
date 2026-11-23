@@ -70,6 +70,16 @@ class ApiClient {
   clearCache(): void {
     this.client = null;
     this.baseUrl = '';
+    this.apiKey = '';
+    this.resetListeners.forEach((listener) => listener());
+  }
+
+  // Things derived from the server (e.g. its capabilities) subscribe here to
+  // be forgotten when the server configuration changes
+  private resetListeners = new Set<() => void>();
+
+  onReset(listener: () => void): void {
+    this.resetListeners.add(listener);
   }
 
   async testConnection(host: string, port: number, apiKey: string, useHttps: boolean): Promise<boolean> {

@@ -1,11 +1,11 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import {
   Play, Pause, SkipForward, SkipBack, Shuffle, Repeat, Repeat1, Music,
   Volume2, VolumeX, Maximize2, PanelRight
 } from 'lucide-react';
 import { useAudioPlayer } from '@/hooks/useAudioPlayer';
 import { useUiStore } from '@/stores/uiStore';
-import { cacheService } from '@/services/cache/CacheService';
+import { useCoverArt } from '@/hooks/useCoverArt';
 import { formatDuration } from '@/utils/format';
 import { getPreloadedRanges } from '@/utils/preload';
 
@@ -17,7 +17,6 @@ export function DesktopPlayerBar() {
   const setPlayerExpanded = useUiStore((s) => s.setPlayerExpanded);
   const isPanelOpen = useUiStore((s) => s.isNowPlayingPanelOpen);
   const togglePanel = useUiStore((s) => s.toggleNowPlayingPanel);
-  const [cover, setCover] = useState<{ id: string; art: string | null } | null>(null);
   const [lastVolume, setLastVolume] = useState(1);
 
   const {
@@ -26,21 +25,9 @@ export function DesktopPlayerBar() {
     togglePlayPause, next, previous, seek, setVolume, toggleShuffle, cycleRepeatMode
   } = useAudioPlayer();
 
-  const fileId = currentTrack?.fileId;
-  useEffect(() => {
-    if (!fileId) return;
-    let cancelled = false;
-    cacheService.getCoverArt(fileId).then((art) => {
-      if (!cancelled) setCover({ id: fileId, art: art || null });
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [fileId]);
+  const coverArt = useCoverArt(currentTrack?.fileId);
 
   if (!currentTrack) return null;
-  // Ignore a cover still loaded for the previous track
-  const coverArt = cover && cover.id === fileId ? cover.art : null;
 
   const toggleMute = () => {
     if (volume > 0) {

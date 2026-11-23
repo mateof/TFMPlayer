@@ -114,7 +114,8 @@ export function PlayerOverlay() {
   const [showQueue, setShowQueue] = useState(false);
   const [loadingMoreQueue, setLoadingMoreQueue] = useState(false);
   const [showPlaylistPicker, setShowPlaylistPicker] = useState(false);
-  const [isFlipped, setIsFlipped] = useState(false);
+  // Start flipped to the equalizer when the user left it open last time
+  const [isFlipped, setIsFlipped] = useState(() => usePlayerStore.getState().showEqualizer);
   const [metadata, setMetadata] = useState<AudioMetadata | null>(null);
   const [loadingMetadata, setLoadingMetadata] = useState(false);
   const [coverArts, setCoverArts] = useState<Record<string, string>>({});
@@ -247,20 +248,6 @@ export function PlayerOverlay() {
     };
   }, [setPlayerExpanded, currentTrack]);
 
-  if (!currentTrack) {
-    return (
-      <div className="fixed inset-0 z-50 flex flex-col items-center justify-center p-6 bg-slate-900">
-        <Music className="w-16 h-16 text-slate-600 mb-4" />
-        <p className="text-slate-400">No track playing</p>
-        <button
-          onClick={handleClose}
-          className="mt-4 text-emerald-400 hover:underline"
-        >
-          Go back
-        </button>
-      </div>
-    );
-  }
 
   const handleSeek = (e: React.ChangeEvent<HTMLInputElement>) => {
     seek(parseFloat(e.target.value));
@@ -302,16 +289,12 @@ export function PlayerOverlay() {
     }
   }, [showQueue, currentIndex]);
 
-  // Set initial flip state based on showEqualizer preference
+  // Load metadata when track changes (keyed on the id: the track object is
+  // replaced when its tags are filled in, which must not restart the load)
+  const currentFileId = currentTrack?.fileId;
   useEffect(() => {
-    if (showEqualizer) {
-      setIsFlipped(true);
-    }
-  }, []);
-
-  // Load metadata when track changes
-  useEffect(() => {
-    if (!currentTrack) {
+    const currentTrack = usePlayerStore.getState().currentTrack;
+    if (!currentFileId || !currentTrack) {
       setMetadata(null);
       audioPlayer.updateCoverArt(null);
       return;
@@ -358,35 +341,24 @@ export function PlayerOverlay() {
       clearTimeout(timeout);
       document.removeEventListener('visibilitychange', onVisible);
     };
-  }, [currentTrack?.fileId]);
+  }, [currentFileId]);
 
-  // Load cover arts for queue tracks
+  // Load cover arts for queue tracks: one bulk read for the ones not seen yet
+  const coverArtsRequestedRef = useRef<Set<string>>(new Set());
   useEffect(() => {
-    const loadCoverArts = async () => {
-      const newCoverArts: Record<string, string> = {};
+    const missing = queue
+      .map((t) => t.fileId)
+      .filter((id) => !coverArtsRequestedRef.current.has(id));
+    if (missing.length === 0) return;
+    missing.forEach((id) => coverArtsRequestedRef.current.add(id));
 
-      for (const track of queue) {
-        // Skip if already loaded
-        if (coverArts[track.fileId]) {
-          newCoverArts[track.fileId] = coverArts[track.fileId];
-          continue;
-        }
-
-        // Try to get from cache
-        const cached = await cacheService.getCoverArt(track.fileId);
-        if (cached) {
-          newCoverArts[track.fileId] = cached;
-        }
+    // Not cancelled on re-run: the ids are already marked as requested, so
+    // dropping this answer would leave them without art for good
+    cacheService.getCoverArts(missing).then((found) => {
+      if (Object.keys(found).length > 0) {
+        setCoverArts((prev) => ({ ...prev, ...found }));
       }
-
-      if (Object.keys(newCoverArts).length > 0) {
-        setCoverArts(prev => ({ ...prev, ...newCoverArts }));
-      }
-    };
-
-    if (queue.length > 0) {
-      loadCoverArts();
-    }
+    }).catch(() => {});
   }, [queue]);
 
   // Drag and drop handlers for queue reordering
@@ -438,6 +410,24 @@ export function PlayerOverlay() {
     },
     threshold: 80
   });
+
+  // Early exit only after every hook has run: returning before them changed
+  // the hook order between renders (rules-of-hooks) and could crash the
+  // overlay when the last track was cleared while it was open.
+  if (!currentTrack) {
+    return (
+      <div className="fixed inset-0 z-50 flex flex-col items-center justify-center p-6 bg-slate-900">
+        <Music className="w-16 h-16 text-slate-600 mb-4" />
+        <p className="text-slate-400">No track playing</p>
+        <button
+          onClick={handleClose}
+          className="mt-4 text-emerald-400 hover:underline"
+        >
+          Go back
+        </button>
+      </div>
+    );
+  }
 
   // Calculate card transform based on swipe
   const getCardTransform = () => {

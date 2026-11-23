@@ -3,12 +3,11 @@ import { useAudioPlayer } from '@/hooks/useAudioPlayer';
 import { formatDuration } from '@/utils/format';
 import { getPreloadedRanges } from '@/utils/preload';
 import { useUiStore } from '@/stores/uiStore';
-import { useState, useEffect, useRef } from 'react';
-import { cacheService } from '@/services/cache/CacheService';
+import { useState, useRef } from 'react';
+import { useCoverArt } from '@/hooks/useCoverArt';
 
 export function MiniPlayer() {
   const setPlayerExpanded = useUiStore((s) => s.setPlayerExpanded);
-  const [coverArt, setCoverArt] = useState<string | null>(null);
   const {
     currentTrack,
     position,
@@ -67,20 +66,7 @@ export function MiniPlayer() {
     }
   };
 
-  // Load cover art when track changes
-  useEffect(() => {
-    if (!currentTrack) {
-      setCoverArt(null);
-      return;
-    }
-
-    const loadCoverArt = async () => {
-      const art = await cacheService.getCoverArt(currentTrack.fileId);
-      setCoverArt(art || null);
-    };
-
-    loadCoverArt();
-  }, [currentTrack?.fileId]);
+  const coverArt = useCoverArt(currentTrack?.fileId);
 
   if (!currentTrack) return null;
 
@@ -185,6 +171,7 @@ export function MiniPlayer() {
           <button
             onClick={handlePlayPause}
             disabled={isLoading}
+            aria-label={isPlaying ? 'Pause' : 'Play'}
             className="p-2 text-white hover:text-emerald-400 transition-colors disabled:opacity-50"
           >
             {isLoading ? (
@@ -197,6 +184,7 @@ export function MiniPlayer() {
           </button>
           <button
             onClick={handleNext}
+            aria-label="Next track"
             className="p-2 text-slate-400 hover:text-white transition-colors"
           >
             <SkipForward className="w-5 h-5" />

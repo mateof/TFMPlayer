@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { RefreshCw, X, Music, Film, FileText, Image, Loader2, AlertTriangle } from 'lucide-react';
 import { channelRefreshService, loadRefreshOptions } from '@/services/channelRefresh/ChannelRefreshService';
 import { useUiStore } from '@/stores/uiStore';
+import { useDialog } from '@/hooks/useDialog';
 import type { ChannelRefreshOptions, ChannelStats } from '@/types/models';
 
 interface RefreshChannelDialogProps {
@@ -17,6 +18,7 @@ export function RefreshChannelDialog({ channelId, channelName, stats, onClose }:
   const addToast = useUiStore((s) => s.addToast);
   const [options, setOptions] = useState<ChannelRefreshOptions>(loadRefreshOptions);
   const [submitting, setSubmitting] = useState(false);
+  const dialogProps = useDialog(onClose, 'refresh-channel-title');
 
   const blocked = stats?.canRefresh === false;
 
@@ -52,11 +54,11 @@ export function RefreshChannelDialog({ channelId, channelName, stats, onClose }:
   return (
     <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center">
       <div className="absolute inset-0 bg-black/60" onClick={onClose} />
-      <div className="relative w-full max-w-md bg-slate-800 rounded-t-2xl sm:rounded-2xl overflow-hidden safe-area-bottom">
+      <div {...dialogProps} className="relative w-full max-w-md bg-slate-800 rounded-t-2xl sm:rounded-2xl overflow-hidden safe-area-bottom outline-none">
         <div className="flex items-center gap-3 px-4 py-3 border-b border-slate-700">
           <RefreshCw className="w-5 h-5 text-emerald-400" />
           <div className="flex-1 min-w-0">
-            <h2 className="text-white font-semibold">Refresh channel</h2>
+            <h2 id="refresh-channel-title" className="text-white font-semibold">Refresh channel</h2>
             <p className="text-xs text-slate-400 truncate">{channelName}</p>
           </div>
           <button onClick={onClose} className="p-2 text-slate-400 hover:text-white" aria-label="Close">

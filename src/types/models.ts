@@ -186,7 +186,10 @@ export interface UpdatePlaylistRequest {
 export interface AddTrackRequest {
   fileId: string;
   channelId: string;
+  channelName?: string;
   fileName: string;
+  fileType?: string;
+  directUrl?: string;
   fileSize: number;
   streamUrl: string;
   isLocalFile?: boolean;

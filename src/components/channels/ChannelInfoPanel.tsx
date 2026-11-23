@@ -1,10 +1,12 @@
 import type { ReactNode } from 'react';
-import { Radio, RefreshCw, Loader2, Music, Film, FileText, Image, Folder, HardDrive, Crown, Star } from 'lucide-react';
+import { RefreshCw, Loader2, Music, Film, FileText, Image, Folder, HardDrive, Crown, Star } from 'lucide-react';
 import { describeRefreshResult, type RefreshJob } from '@/services/channelRefresh/ChannelRefreshService';
 import { formatRelativeTime } from '@/utils/format';
+import { ChannelAvatar } from '@/components/channels/ChannelAvatar';
 import type { ChannelDetail, ChannelStats } from '@/types/models';
 
 interface ChannelInfoPanelProps {
+  channelId: string;
   channel: ChannelDetail | null;
   stats: ChannelStats | null;
   job?: RefreshJob;
@@ -13,7 +15,7 @@ interface ChannelInfoPanelProps {
 }
 
 /** Desktop side panel of a channel: statistics, index refresh and filters. */
-export function ChannelInfoPanel({ channel, stats, job, onRefresh, children }: ChannelInfoPanelProps) {
+export function ChannelInfoPanel({ channelId, channel, stats, job, onRefresh, children }: ChannelInfoPanelProps) {
   const running = job?.phase === 'running' || (!job && stats?.isRefreshing);
 
   const counters = stats
@@ -30,9 +32,7 @@ export function ChannelInfoPanel({ channel, stats, job, onRefresh, children }: C
     <div className="p-4 space-y-5">
       {/* Identity */}
       <div className="flex items-center gap-3">
-        <div className="w-14 h-14 rounded-full bg-slate-700 flex items-center justify-center shrink-0">
-          <Radio className="w-7 h-7 text-slate-400" />
-        </div>
+        <ChannelAvatar channelId={channelId} name={channel?.name ?? stats?.name} size="lg" />
         <div className="min-w-0">
           <p className="text-white font-semibold leading-tight break-words">{channel?.name ?? stats?.name ?? 'Channel'}</p>
           <div className="flex flex-wrap items-center gap-1.5 mt-1 text-xs text-slate-400">

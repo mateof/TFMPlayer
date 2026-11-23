@@ -9,6 +9,17 @@ class CacheService {
     return !!cached?.blob;
   }
 
+  /**
+   * Which of these tracks are stored on the device, in one IndexedDB
+   * round trip (a page of 50 tracks used to cost 50 sequential reads).
+   */
+  async getCachedTrackIds(trackIds: string[]): Promise<Set<string>> {
+    const unique = [...new Set(trackIds)];
+    if (unique.length === 0) return new Set();
+    const keys = await db.cachedTracks.where(':id').anyOf(unique).filter((t) => !!t.blob).primaryKeys();
+    return new Set(keys as string[]);
+  }
+
   // Get cached track
   async getCachedTrack(trackId: string): Promise<CachedTrackEntity | undefined> {
     return db.cachedTracks.get(trackId);
@@ -239,6 +250,18 @@ class CacheService {
   async getCoverArt(trackId: string): Promise<string | undefined> {
     const track = await db.cachedTracks.get(trackId);
     return track?.coverArt;
+  }
+
+  /** Cover art for many tracks at once (bulkGet), keyed by track id. */
+  async getCoverArts(trackIds: string[]): Promise<Record<string, string>> {
+    const unique = [...new Set(trackIds)];
+    if (unique.length === 0) return {};
+    const tracks = await db.cachedTracks.bulkGet(unique);
+    const result: Record<string, string> = {};
+    tracks.forEach((track, i) => {
+      if (track?.coverArt) result[unique[i]] = track.coverArt;
+    });
+    return result;
   }
 }
 

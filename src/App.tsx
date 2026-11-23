@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { PersistQueryClientProvider } from '@tanstack/react-query-persist-client';
 
 import { AppShell } from '@/components/layout/AppShell';
 import { SetupPage } from '@/pages/SetupPage';
@@ -11,22 +11,15 @@ import { PlaylistsPage } from '@/pages/PlaylistsPage';
 import { PlaylistDetailPage } from '@/pages/PlaylistDetailPage';
 import { DownloadsPage } from '@/pages/DownloadsPage';
 import { SettingsPage } from '@/pages/SettingsPage';
+import { SearchPage } from '@/pages/SearchPage';
 import { LoadingScreen } from '@/components/common/Spinner';
 import { PWAUpdatePrompt } from '@/components/common/PWAUpdatePrompt';
 
 import { isServerConfigured, requestPersistentStorage } from '@/db/database';
 import { useSettingsStore } from '@/stores/settingsStore';
 import { playlistSyncService } from '@/services/sync/PlaylistSyncService';
+import { queryClient, queryPersister, PERSIST_MAX_AGE, QUERY_CACHE_BUSTER } from '@/services/query/queryClient';
 
-const queryClient = new QueryClient({
-  defaultOptions: {
-    queries: {
-      retry: 1,
-      staleTime: 5 * 60 * 1000, // 5 minutes
-      refetchOnWindowFocus: false
-    }
-  }
-});
 
 function AppContent() {
   const { isConfigured, setConfigured } = useSettingsStore();
@@ -84,6 +77,7 @@ function AppContent() {
             <Route path="/playlists/:id" element={<PlaylistDetailPage />} />
             <Route path="/downloads" element={<DownloadsPage />} />
             <Route path="/settings" element={<SettingsPage />} />
+            <Route path="/search" element={<SearchPage />} />
           </Route>
           <Route path="*" element={<Navigate to="/channels" replace />} />
         </>
@@ -99,11 +93,22 @@ export default function App() {
   const basename = import.meta.env.BASE_URL.replace(/\/$/, '');
 
   return (
-    <QueryClientProvider client={queryClient}>
+    <PersistQueryClientProvider
+      client={queryClient}
+      persistOptions={{
+        persister: queryPersister,
+        maxAge: PERSIST_MAX_AGE,
+        buster: QUERY_CACHE_BUSTER,
+        dehydrateOptions: {
+          shouldDehydrateQuery: (query) =>
+            query.state.status === 'success' && query.meta?.persist === true
+        }
+      }}
+    >
       <BrowserRouter basename={basename}>
         <AppContent />
       </BrowserRouter>
       <PWAUpdatePrompt />
-    </QueryClientProvider>
+    </PersistQueryClientProvider>
   );
 }

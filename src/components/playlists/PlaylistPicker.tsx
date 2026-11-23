@@ -6,8 +6,8 @@ import { Spinner } from '@/components/common/Spinner';
 import { playlistsApi } from '@/services/api/playlists.api';
 import { useUiStore } from '@/stores/uiStore';
 import { isPlaylistOffline } from '@/db/database';
-import { downloadManager } from '@/services/download/DownloadManager';
-import { cacheService } from '@/services/cache/CacheService';
+import { addTracksToPlaylist } from '@/services/playlists/addToPlaylist';
+import { useDialog } from '@/hooks/useDialog';
 import type { Track, Playlist } from '@/types/models';
 
 interface PlaylistPickerProps {
@@ -29,6 +29,7 @@ export function PlaylistPicker({ tracks, onClose, onAdded }: PlaylistPickerProps
   const [addingTo, setAddingTo] = useState<string | null>(null);
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
 
+  const dialogProps = useDialog(onClose, 'playlist-picker-title');
   const isMultiple = tracks.length > 1;
   const firstTrack = tracks[0];
 
@@ -43,12 +44,8 @@ export function PlaylistPicker({ tracks, onClose, onAdded }: PlaylistPickerProps
       setPlaylists(data);
 
       // Check which playlists are offline
-      const offlineIds = new Set<string>();
-      for (const playlist of data) {
-        const isOffline = await isPlaylistOffline(playlist.id);
-        if (isOffline) offlineIds.add(playlist.id);
-      }
-      setOfflinePlaylistIds(offlineIds);
+      const offline = await Promise.all(data.map((p) => isPlaylistOffline(p.id)));
+      setOfflinePlaylistIds(new Set(data.filter((_, i) => offline[i]).map((p) => p.id)));
     } catch (error) {
       addToast('Failed to load playlists', 'error');
       console.error(error);
@@ -57,49 +54,13 @@ export function PlaylistPicker({ tracks, onClose, onAdded }: PlaylistPickerProps
     }
   };
 
-  // Queue for download every track that isn't cached yet (offline playlists)
-  const queueMissingDownloads = async (): Promise<number> => {
-    let queued = 0;
-    for (const track of tracks) {
-      if (!(await cacheService.isTrackCached(track.fileId))) {
-        await downloadManager.addToQueue(track);
-        queued++;
-      }
-    }
-    return queued;
-  };
-
-  const reportResult = async (
-    playlistName: string,
-    playlistId: string | null,
-    result: { added: number; duplicates: number; failed: number }
-  ) => {
-    const parts: string[] = [];
-    if (result.added > 0) {
-      parts.push(`${result.added} track${result.added === 1 ? '' : 's'} added`);
-    }
-    if (result.duplicates > 0) parts.push(`${result.duplicates} already there`);
-    if (result.failed > 0) parts.push(`${result.failed} failed`);
-
-    // Offline playlists pull in the audio too
-    if (result.added > 0 && playlistId && offlinePlaylistIds.has(playlistId)) {
-      const queued = await queueMissingDownloads();
-      if (queued > 0) parts.push(`${queued} queued for download`);
-    }
-
-    const summary = parts.length > 0 ? parts.join(', ') : 'Nothing to add';
-    const tone = result.added > 0 ? 'success' : result.failed > 0 ? 'error' : 'info';
-    addToast(`${playlistName}: ${summary}`, tone);
-  };
-
   const handleAddToPlaylist = async (playlistId: string, playlistName: string) => {
     setAddingTo(playlistId);
     setProgress({ done: 0, total: tracks.length });
     try {
-      const result = await playlistsApi.addTracks(playlistId, tracks, (done, total) =>
+      await addTracksToPlaylist(playlistId, playlistName, tracks, (done, total) =>
         setProgress({ done, total })
       );
-      await reportResult(playlistName, playlistId, result);
       onAdded?.();
       onClose();
     } catch (error) {
@@ -119,10 +80,9 @@ export function PlaylistPicker({ tracks, onClose, onAdded }: PlaylistPickerProps
     setProgress({ done: 0, total: tracks.length });
     try {
       const newPlaylist = await playlistsApi.create({ name, description: '' });
-      const result = await playlistsApi.addTracks(newPlaylist.id, tracks, (done, total) =>
+      await addTracksToPlaylist(newPlaylist.id, name, tracks, (done, total) =>
         setProgress({ done, total })
       );
-      await reportResult(name, null, result);
       onAdded?.();
       onClose();
     } catch (error) {
@@ -143,15 +103,16 @@ export function PlaylistPicker({ tracks, onClose, onAdded }: PlaylistPickerProps
       />
 
       {/* Modal */}
-      <div className="relative w-full max-w-md bg-slate-800 rounded-t-2xl sm:rounded-2xl max-h-[80vh] overflow-hidden">
+      <div {...dialogProps} className="relative w-full max-w-md bg-slate-800 rounded-t-2xl sm:rounded-2xl max-h-[80vh] overflow-hidden outline-none">
         {/* Header */}
         <div className="flex items-center justify-between p-4 border-b border-slate-700">
-          <h2 className="text-lg font-bold text-white">Add to Playlist</h2>
+          <h2 id="playlist-picker-title" className="text-lg font-bold text-white">Add to Playlist</h2>
           <button
             onClick={onClose}
             className="p-2 text-slate-400 hover:text-white transition-colors"
+            aria-label="Close"
           >
-            <X className="w-5 h-5" />
+            <X className="w-5 h-5" aria-hidden />
           </button>
         </div>
 

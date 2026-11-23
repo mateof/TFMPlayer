@@ -108,14 +108,8 @@ class PlaylistSyncService {
       serverPlaylist.tracks
     );
 
-    // Queue new tracks for download
-    for (const track of newTracks) {
-      const isCached = await cacheService.isTrackCached(track.fileId);
-      if (!isCached) {
-        console.log(`[PlaylistSync] Queueing download: ${track.fileName}`);
-        await downloadManager.addToQueue(track);
-      }
-    }
+    // Queue new tracks for download (cached ones are skipped in bulk)
+    await downloadManager.addMultipleToQueue(newTracks);
   }
 
   // Check for and download missing tracks in offline playlists
@@ -125,13 +119,11 @@ class PlaylistSyncService {
 
     for (const playlist of offlinePlaylists) {
       const tracks: Track[] = JSON.parse(playlist.tracksJson);
-
-      for (const track of tracks) {
-        const isCached = await cacheService.isTrackCached(track.fileId);
-        if (!isCached) {
-          await downloadManager.addToQueue(track);
-          totalMissing++;
-        }
+      const cached = await cacheService.getCachedTrackIds(tracks.map((t) => t.fileId));
+      const missing = tracks.filter((t) => !cached.has(t.fileId));
+      if (missing.length > 0) {
+        await downloadManager.addMultipleToQueue(missing);
+        totalMissing += missing.length;
       }
     }
 
