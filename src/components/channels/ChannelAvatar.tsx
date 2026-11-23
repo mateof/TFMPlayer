@@ -1,16 +1,28 @@
 import { useEffect, useState } from 'react';
 import { Radio } from 'lucide-react';
-import { buildBaseUrl } from '@/services/api/client';
+import { apiClient, buildBaseUrl } from '@/services/api/client';
 
 // Channels without a photo answer 404: remember them so lists that remount
 // don't ask the server again in this session
 const missingAvatars = new Set<string>();
+
+// baseUrl here is "<server>|<apiKey>" (see useServerBaseUrl)
+function avatarUrl(serverAndKey: string, id: string): string {
+  const [base, key] = serverAndKey.split('|');
+  const query = key ? `?apiKey=${encodeURIComponent(key)}` : '';
+  return `${base}/api/v1/channels/${encodeURIComponent(id)}/image${query}`;
+}
 let baseUrlPromise: Promise<string> | null = null;
 
 function useServerBaseUrl(): string | null {
   const [baseUrl, setBaseUrl] = useState<string | null>(null);
   useEffect(() => {
-    if (!baseUrlPromise) baseUrlPromise = buildBaseUrl().catch(() => '');
+    // The v1 image endpoint plus ?apiKey=: <img> can't send headers, and
+    // servers with a web password reject the old unauthenticated route
+    if (!baseUrlPromise) {
+      baseUrlPromise = (async () => `${await buildBaseUrl()}|${await apiClient.getApiKey()}`)()
+        .catch(() => '');
+    }
     let active = true;
     baseUrlPromise.then((url) => {
       if (active) setBaseUrl(url || null);
@@ -35,7 +47,7 @@ interface ChannelAvatarProps {
 }
 
 /**
- * Channel photo served by TelegramFileManager (`/api/channel/image/{id}`,
+ * Channel photo served by TelegramFileManager (`/api/v1/channels/{id}/image`,
  * public and cached by the server), with the initial as fallback.
  */
 export function ChannelAvatar({ channelId, name, size = 'md' }: ChannelAvatarProps) {
@@ -50,7 +62,7 @@ export function ChannelAvatar({ channelId, name, size = 'md' }: ChannelAvatarPro
     <div className={`${s.box} rounded-full bg-slate-700 flex items-center justify-center shrink-0 overflow-hidden`} aria-hidden>
       {baseUrl && !failed ? (
         <img
-          src={`${baseUrl}/api/channel/image/${encodeURIComponent(id)}`}
+          src={avatarUrl(baseUrl, id)}
           alt=""
           loading="lazy"
           decoding="async"
