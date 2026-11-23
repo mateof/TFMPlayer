@@ -2,8 +2,10 @@ import { useState } from 'react';
 import { NavLink } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import {
-  Radio, HardDrive, ListMusic, Download, Settings, Star, Loader2, AudioLines, Search, ListPlus, History
+  Radio, HardDrive, ListMusic, Download, Settings, Star, Loader2, AudioLines, Search, ListPlus, History,
+  ServerCog, Share2
 } from 'lucide-react';
+import { useServerFeatures } from '@/hooks/useServerFeatures';
 import { useDownloadStore } from '@/services/download/DownloadManager';
 import { useChannelRefreshStore } from '@/services/channelRefresh/ChannelRefreshService';
 import { useFavoriteChannelsQuery, usePlaylistsQuery } from '@/hooks/queries';
@@ -15,13 +17,15 @@ import { useUiStore } from '@/stores/uiStore';
 import type { Playlist } from '@/types/models';
 import { t } from '@/i18n';
 
-const navItems = [
+const navItems: { to: string; icon: typeof Radio; label: string; feature?: string }[] = [
   { to: '/channels', icon: Radio, label: t('Channels') },
   { to: '/search', icon: Search, label: t('Search') },
   { to: '/local', icon: HardDrive, label: t('Local files') },
+  { to: '/shares', icon: Share2, label: t('Shared collections'), feature: 'shares.browse' },
   { to: '/playlists', icon: ListMusic, label: t('Playlists') },
   { to: '/history', icon: History, label: t('History') },
   { to: '/downloads', icon: Download, label: t('Downloads') },
+  { to: '/transfers', icon: ServerCog, label: t('Server transfers') },
   { to: '/settings', icon: Settings, label: t('Settings') }
 ];
 
@@ -37,6 +41,7 @@ export function Sidebar() {
   const runningRefreshes = Object.values(refreshJobs).filter((j) => j.phase === 'running');
   const favorites = useFavoriteChannelsQuery().data ?? [];
   const playlists = usePlaylistsQuery().data ?? [];
+  const { features } = useServerFeatures();
 
   return (
     <aside className="flex flex-col h-full min-h-0 bg-slate-950 border-r border-slate-800" aria-label={t('Main navigation')}>
@@ -46,7 +51,7 @@ export function Sidebar() {
       </div>
 
       <nav className="px-3 space-y-1">
-        {navItems.map(({ to, icon: Icon, label }) => (
+        {navItems.filter((item) => !item.feature || features.has(item.feature)).map(({ to, icon: Icon, label }) => (
           <NavLink key={to} to={to} className={linkClass}>
             <Icon className="w-5 h-5" aria-hidden />
             <span className="flex-1">{label}</span>

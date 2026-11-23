@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { Download, Music, Trash2, HardDrive, X, RotateCcw, Play, Loader2, Search } from 'lucide-react';
+import { Download, Music, Trash2, HardDrive, X, RotateCcw, Play, Loader2, Search, ServerCog } from 'lucide-react';
 import { Header } from '@/components/layout/Header';
 import { Link } from 'react-router-dom';
 import { Button } from '@/components/common/Button';
@@ -294,13 +294,24 @@ export function DownloadsPage() {
       <Header
         title={t('Downloads')}
         actions={
-          <Link
-            to="/storage"
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-800 text-sm text-slate-200 hover:bg-slate-700"
-          >
-            <HardDrive className="w-4 h-4" aria-hidden />
-            {t('Storage')}
-          </Link>
+          <>
+            <Link
+              to="/transfers"
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-800 text-sm text-slate-200 hover:bg-slate-700"
+              title={t('Server transfers')}
+            >
+              <ServerCog className="w-4 h-4" aria-hidden />
+              <span className="hidden sm:inline">{t('Server')}</span>
+              <span className="sr-only sm:hidden">{t('Server transfers')}</span>
+            </Link>
+            <Link
+              to="/storage"
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-800 text-sm text-slate-200 hover:bg-slate-700"
+            >
+              <HardDrive className="w-4 h-4" aria-hidden />
+              {t('Storage')}
+            </Link>
+          </>
         }
       />
 

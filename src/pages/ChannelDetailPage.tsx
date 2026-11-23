@@ -9,6 +9,8 @@ import { RefreshProgressView } from '@/components/channels/RefreshProgressView';
 import { channelsApi } from '@/services/api/channels.api';
 import { channelRefreshService, useChannelRefreshStore } from '@/services/channelRefresh/ChannelRefreshService';
 import { useChannelInfoQuery, useChannelStatsQuery } from '@/hooks/queries';
+import { useServerFeatures } from '@/hooks/useServerFeatures';
+import { createChannelTarget } from '@/services/files/fileManager';
 import { usePlayerStore } from '@/stores/playerStore';
 import { queryKeys } from '@/services/query/queryClient';
 import { fileToTrack } from '@/utils/channelTracks';
@@ -42,6 +44,12 @@ export function ChannelDetailPage() {
   const stats = statsQuery.data ?? null;
   const channelName = channel?.name ?? stats?.name ?? '';
   const refreshJob = useChannelRefreshStore((s) => (id ? s.jobs[id] : undefined));
+  const { features } = useServerFeatures();
+  // Manage mode needs the v1 file endpoints with media URLs
+  const manager = useMemo(
+    () => (id && features.has('files.content') ? createChannelTarget(id, features) : null),
+    [id, features]
+  );
 
   const currentFolderId = searchParams.get('folder') || '';
   const pathParam = searchParams.get('path');
@@ -132,6 +140,7 @@ export function ChannelDetailPage() {
         onOpenFolder={(file) => openFolder({ id: file.id, name: file.name })}
         onQueueStarted={registerQueueSource}
         emptyHint={t('Try changing the filter or refreshing the channel')}
+        manager={manager}
         headerActions={
           <button
             onClick={() => setShowRefreshDialog(true)}

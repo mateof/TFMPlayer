@@ -2,6 +2,8 @@ import { useMemo } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { FileBrowser, type FileSource } from '@/components/files/FileBrowser';
 import { localFilesApi } from '@/services/api/localFiles.api';
+import { createLocalTarget } from '@/services/files/fileManager';
+import { useServerFeatures } from '@/hooks/useServerFeatures';
 import { collectLocalFolderTracks, localFileToTrack } from '@/utils/collectTracks';
 import { t } from '@/i18n';
 
@@ -26,6 +28,9 @@ export function LocalFilesPage() {
   const pathParam = searchParams.get('path') || '';
   const breadcrumbsParam = searchParams.get('breadcrumbs');
   const folderPath = useMemo(() => parseBreadcrumbs(breadcrumbsParam), [breadcrumbsParam]);
+
+  const { features } = useServerFeatures();
+  const manager = useMemo(() => (features.has('files.content') ? createLocalTarget(features) : null), [features]);
 
   const source = useMemo<FileSource>(() => ({
     key: 'local',
@@ -64,6 +69,7 @@ export function LocalFilesPage() {
       breadcrumbs={folderPath.map((f) => f.name)}
       onNavigateBreadcrumb={navigateBreadcrumb}
       onOpenFolder={(file) => openFolder({ path: file.path, name: file.name })}
+      manager={manager}
     />
   );
 }

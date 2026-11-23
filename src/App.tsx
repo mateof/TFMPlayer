@@ -32,6 +32,9 @@ const StoragePage = named(() => import('@/pages/StoragePage'), 'StoragePage');
 const SettingsPage = named(() => import('@/pages/SettingsPage'), 'SettingsPage');
 const SearchPage = named(() => import('@/pages/SearchPage'), 'SearchPage');
 const HistoryPage = named(() => import('@/pages/HistoryPage'), 'HistoryPage');
+const TransfersPage = named(() => import('@/pages/TransfersPage'), 'TransfersPage');
+const SharesPage = named(() => import('@/pages/SharesPage'), 'SharesPage');
+const SharedCollectionPage = named(() => import('@/pages/SharedCollectionPage'), 'SharedCollectionPage');
 
 function AppContent() {
   const { isConfigured, setConfigured } = useSettingsStore();
@@ -81,6 +84,9 @@ function AppContent() {
               <Route path="/history" element={<HistoryPage />} />
               <Route path="/downloads" element={<DownloadsPage />} />
               <Route path="/storage" element={<StoragePage />} />
+              <Route path="/transfers" element={<TransfersPage />} />
+              <Route path="/shares" element={<SharesPage />} />
+              <Route path="/shares/:id" element={<SharedCollectionPage />} />
               <Route path="/settings" element={<SettingsPage />} />
             </Route>
             <Route path="*" element={<Navigate to="/channels" replace />} />

@@ -13,6 +13,16 @@ desde el navegador).
   virtualizadas (miles de ficheros sin tirones). Selección múltiple (pulsación larga,
   Ctrl+clic o Espacio) para añadir carpetas enteras a una playlist, descargarlas o
   ponerlas a continuación.
+- **Modo Gestionar** en canales y ficheros locales (servidores nuevos): todos los tipos de
+  fichero con iconos, vista de lista o cuadrícula con miniaturas, panel de detalles (tamaño,
+  fechas, ruta, hashes), crear carpetas, renombrar, cortar/copiar/pegar con selector de
+  carpeta, eliminar, subir desde el dispositivo (con progreso y cancelar, o arrastrando
+  ficheros en escritorio), descargar al dispositivo o al servidor, precargar en la caché del
+  servidor, compartir enlace y exportar carpetas como compartido.
+- **Visor** de imágenes (galería con zoom, pellizco y deslizar), vídeo, PDF y texto.
+- **Colecciones compartidas** importadas en el servidor (solo lectura).
+- **Transferencias del servidor**: descargas, subidas y tareas en curso, con pausar,
+  reanudar, cancelar, reintentar y quitar de la lista.
 - **Refrescar un canal** desde la app: el servidor indexa los ficheros nuevos de
   Telegram (el audio siempre; vídeo, documentos y fotos a elegir).
 - **Búsqueda global** en todos los canales y en los ficheros locales.
@@ -59,6 +69,12 @@ Algunas funciones dependen de la versión del servidor; la app pregunta qué sop
 | Añadir muchas pistas a una playlist de golpe | Se añaden de una en una |
 | Búsqueda global | Se buscan solo los canales favoritos |
 | Refrescar canal / estadísticas | El botón avisa de que hay que actualizar el servidor |
+| Modo Gestionar, visor (`files.content`) | Solo la vista de música (audio y carpetas) |
+| Miniaturas (`files.thumbnails`) | Iconos por tipo |
+| Precargar (`files.preload`) | No se ofrece |
+| Copiar/mover en ficheros locales (`local.copyMove`) | No se ofrece (en canales sí) |
+| Colecciones compartidas, exportar compartido (`shares.browse`) | La sección no aparece |
+| Quitar transferencias de la lista (`transfers.remove`) | Solo "quitar las terminadas" |
 
 ## Desarrollo
 
@@ -81,6 +97,11 @@ Cada push a `main` ejecuta tests y build y despliega en GitHub Pages
   audio, precarga, crossfade, Media Session, temporizador, recuperación de errores).
 - `src/components/files/FileBrowser.tsx`: navegador de ficheros compartido por canales
   y ficheros locales.
+- `src/services/api/v1/`: cliente tipado de la API v1. Refleja el paquete
+  `ClientApp/packages/api-client` de TelegramFileManager (mismos nombres de tipos y
+  funciones), autenticado con la clave de API.
+- `src/services/files/fileManager.ts`: modo Gestionar (destinos canal/local/compartido y qué
+  operaciones ofrece cada uno según el servidor).
 - `src/services/query/queryClient.ts`: react-query persistido en IndexedDB (las
   pantallas se ven al instante y sin conexión).
 - `src/db/database.ts`: IndexedDB (Dexie): descargas, cola de descargas, historial,

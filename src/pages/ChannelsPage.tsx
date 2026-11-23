@@ -1,11 +1,12 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { Search, Star, Radio, FolderOpen, ChevronRight, HardDrive, X } from 'lucide-react';
+import { Search, Star, Radio, FolderOpen, ChevronRight, HardDrive, X, Share2, ServerCog } from 'lucide-react';
 import { Header } from '@/components/layout/Header';
 import { ChannelAvatar } from '@/components/channels/ChannelAvatar';
 import { Input } from '@/components/common/Input';
 import { LoadingScreen } from '@/components/common/Spinner';
 import { useUiStore } from '@/stores/uiStore';
+import { useServerFeatures } from '@/hooks/useServerFeatures';
 import { useChannelsQuery, useFavoriteChannelsQuery, useChannelFoldersQuery, useToggleFavoriteMutation } from '@/hooks/queries';
 import type { Channel, ChannelFolder } from '@/types/models';
 import { t } from '@/i18n';
@@ -198,7 +199,7 @@ export function ChannelsPage() {
             onSelectChannel={(ch) => navigate(`/channels/${ch.id}`)}
           />
         ) : (
-          <LocalFilesEntry onNavigate={() => navigate('/local')} />
+          <LocalFilesEntry onNavigate={navigate} />
         )}
       </div>
     </div>
@@ -275,27 +276,36 @@ interface FoldersListProps {
 }
 
 interface LocalFilesEntryProps {
-  onNavigate: () => void;
+  onNavigate: (to: string) => void;
 }
 
 function LocalFilesEntry({ onNavigate }: LocalFilesEntryProps) {
+  const { features } = useServerFeatures();
+  const entries = [
+    { to: '/local', icon: <HardDrive className="w-7 h-7 text-emerald-400" aria-hidden />, tint: 'bg-emerald-500/20', title: t('Local Files'), text: t("Browse files from server's local storage") },
+    ...(features.has('shares.browse')
+      ? [{ to: '/shares', icon: <Share2 className="w-7 h-7 text-sky-400" aria-hidden />, tint: 'bg-sky-500/20', title: t('Shared collections'), text: t('Files other people shared with this server (read only)') }]
+      : []),
+    { to: '/transfers', icon: <ServerCog className="w-7 h-7 text-amber-400" aria-hidden />, tint: 'bg-amber-500/20', title: t('Server transfers'), text: t('Downloads and uploads running on the server') }
+  ];
   return (
-    <div className="p-4">
-      <button
-        onClick={onNavigate}
-        className="w-full flex items-center gap-4 p-6 bg-slate-800 rounded-xl hover:bg-slate-700 transition-colors"
-      >
-        <div className="w-14 h-14 bg-emerald-500/20 rounded-xl flex items-center justify-center">
-          <HardDrive className="w-7 h-7 text-emerald-400" />
-        </div>
-        <div className="flex-1 text-left">
-          <p className="font-medium text-white text-lg">{t('Local Files')}</p>
-          <p className="text-sm text-slate-400">
-            {t("Browse files from server's local storage")}
-          </p>
-        </div>
-        <ChevronRight className="w-6 h-6 text-slate-500" />
-      </button>
+    <div className="p-4 space-y-3">
+      {entries.map((entry) => (
+        <button
+          key={entry.to}
+          onClick={() => onNavigate(entry.to)}
+          className="w-full flex items-center gap-4 p-6 bg-slate-800 rounded-xl hover:bg-slate-700 transition-colors"
+        >
+          <div className={`w-14 h-14 ${entry.tint} rounded-xl flex items-center justify-center`}>
+            {entry.icon}
+          </div>
+          <div className="flex-1 text-left">
+            <p className="font-medium text-white text-lg">{entry.title}</p>
+            <p className="text-sm text-slate-400">{entry.text}</p>
+          </div>
+          <ChevronRight className="w-6 h-6 text-slate-500" aria-hidden />
+        </button>
+      ))}
     </div>
   );
 }

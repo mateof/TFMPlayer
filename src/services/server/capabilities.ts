@@ -11,7 +11,16 @@ export type ServerFeature =
   | 'search.global'
   | 'channels.refresh'
   | 'channels.refreshProgress'
-  | 'stream.localTranscode';
+  | 'stream.localTranscode'
+  // File manager (v1): media URLs, operations, shared collections, transfers
+  | 'files.content'
+  | 'files.thumbnails'
+  | 'files.preload'
+  | 'local.copyMove'
+  | 'shares.browse'
+  | 'search.v1'
+  | 'events.hub'
+  | 'transfers.remove';
 
 export interface ServerCapabilities {
   apiVersion: number;

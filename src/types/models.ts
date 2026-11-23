@@ -44,7 +44,7 @@ export interface ChannelFile {
   parentId: string;
   size: number;
   type: string;
-  category: 'Audio' | 'Video' | 'Document' | 'Photo' | 'Folder';
+  category: FileCategory;
   dateCreated: string;
   dateModified: string;
   messageId?: number;
@@ -53,7 +53,23 @@ export interface ChannelFile {
   streamUrl?: string;
   downloadUrl?: string;
   thumbnailUrl?: string;
+  // Only on entries listed through the v1 API (Manage mode)
+  sizeText?: string;
+  isSplit?: boolean;
+  md5Hash?: string | null;
+  xxHash?: string | null;
+  /** v1 URL of the bytes for inline viewing (needs `?apiKey=`). */
+  contentUrl?: string;
+  /** Same bytes as a download (needs `?apiKey=`). */
+  contentDownloadUrl?: string;
+  /** Audio/video: what to give a media element (needs `?apiKey=`). */
+  playbackUrl?: string;
+  /** Folder path the entry lives in (v1 `path`, ends with `/`). */
+  folderPath?: string;
 }
+
+/** Categories reported by the server; the v1 API adds Archive/Application/Other. */
+export type FileCategory = 'Audio' | 'Video' | 'Document' | 'Photo' | 'Folder' | 'Archive' | 'Application' | 'Other';
 
 // Track model
 export interface Track {

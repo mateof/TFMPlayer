@@ -1,5 +1,11 @@
 import { FILTER_OPTIONS, SORT_OPTIONS, type FileFilters } from '@/hooks/useFileFilters';
+import { MANAGE_FILTERS, MANAGE_FILTER_LABELS, type ManageFilter } from '@/services/files/fileManager';
 import { t } from '@/i18n';
+
+interface ManageFilterProps {
+  typeFilter: ManageFilter;
+  setTypeFilter: (filter: ManageFilter) => void;
+}
 
 const chipClass = (active: boolean) =>
   `px-3 py-1 text-sm rounded-full transition-colors focus-visible:outline-2 focus-visible:outline-emerald-400 ${
@@ -7,7 +13,7 @@ const chipClass = (active: boolean) =>
   }`;
 
 /** Filter / format / sort chips shared by the channel and local file browsers. */
-export function FileFilterControls({ filters }: { filters: FileFilters }) {
+export function FileFilterControls({ filters, manage }: { filters: FileFilters; manage?: ManageFilterProps }) {
   const { filterMode, sortBy, sortDesc, setFilterMode, toggleSort } = filters;
 
   const group = (name: 'general' | 'format', label: string) => (
@@ -30,8 +36,28 @@ export function FileFilterControls({ filters }: { filters: FileFilters }) {
 
   return (
     <div className="space-y-3">
-      {group('general', t('Filter'))}
-      {group('format', t('Audio Format'))}
+      {manage ? (
+        <div role="group" aria-label={t('File type')}>
+          <p className="text-xs text-slate-400 mb-2">{t('File type')}</p>
+          <div className="flex flex-wrap gap-2">
+            {MANAGE_FILTERS.map((key) => (
+              <button
+                key={key}
+                onClick={() => manage.setTypeFilter(key)}
+                aria-pressed={manage.typeFilter === key}
+                className={chipClass(manage.typeFilter === key)}
+              >
+                {t(MANAGE_FILTER_LABELS[key])}
+              </button>
+            ))}
+          </div>
+        </div>
+      ) : (
+        <>
+          {group('general', t('Filter'))}
+          {group('format', t('Audio Format'))}
+        </>
+      )}
       <div role="group" aria-label={t('Sort by')}>
         <p className="text-xs text-slate-400 mb-2">{t('Sort by')}</p>
         <div className="flex flex-wrap gap-2">
