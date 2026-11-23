@@ -2,6 +2,7 @@ import type { ReactNode } from 'react';
 import { RefreshCw, Loader2, Music, Film, FileText, Image, Folder, HardDrive, Crown, Star } from 'lucide-react';
 import { describeRefreshResult, type RefreshJob } from '@/services/channelRefresh/ChannelRefreshService';
 import { formatRelativeTime } from '@/utils/format';
+import { RefreshProgressView } from '@/components/channels/RefreshProgressView';
 import { ChannelAvatar } from '@/components/channels/ChannelAvatar';
 import type { ChannelDetail, ChannelStats } from '@/types/models';
 import { t } from '@/i18n';
@@ -89,7 +90,8 @@ export function ChannelInfoPanel({ channelId, channel, stats, job, onRefresh, ch
             {running ? t('Refreshing...') : t('Refresh')}
           </button>
         </div>
-        {running && (
+        {running && job?.progress !== undefined && <RefreshProgressView job={job} />}
+        {running && job?.progress === undefined && (
           <p className="text-xs text-slate-400">
             {job
               ? t('Scanning Telegram, started {time}.', { time: formatRelativeTime(new Date(job.startedAt)) })

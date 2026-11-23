@@ -10,6 +10,7 @@ export type ServerFeature =
   | 'playlist.bulkAdd'
   | 'search.global'
   | 'channels.refresh'
+  | 'channels.refreshProgress'
   | 'stream.localTranscode';
 
 export interface ServerCapabilities {

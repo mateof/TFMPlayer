@@ -4,10 +4,14 @@ import type { ChannelRefreshResult } from '@/types/models';
 const api = vi.hoisted(() => ({
   startRefresh: vi.fn(),
   isRefreshing: vi.fn(),
-  getRefreshResult: vi.fn()
+  getRefreshResult: vi.fn(),
+  getRefreshProgress: vi.fn(),
+  cancelRefresh: vi.fn()
 }));
+const caps = vi.hoisted(() => ({ has: vi.fn() }));
 
 vi.mock('@/services/api/channels.api', () => ({ channelsApi: api }));
+vi.mock('@/services/server/capabilities', () => ({ serverCapabilities: caps }));
 
 import {
   channelRefreshService,
@@ -48,6 +52,9 @@ describe('channelRefreshService', () => {
     api.startRefresh.mockReset().mockResolvedValue(true);
     api.isRefreshing.mockReset();
     api.getRefreshResult.mockReset();
+    api.getRefreshProgress.mockReset();
+    api.cancelRefresh.mockReset().mockResolvedValue(true);
+    caps.has.mockReset().mockResolvedValue(false);
   });
 
   afterEach(() => {
@@ -146,6 +153,55 @@ describe('channelRefreshService', () => {
     });
     useChannelRefreshStore.getState().dismiss('42'); // stop the loop
     await advance(3000);
+  });
+});
+
+describe('channelRefreshService progress and cancel', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    useChannelRefreshStore.setState({ jobs: {} });
+    useUiStore.setState({ toasts: [] });
+    api.startRefresh.mockReset().mockResolvedValue(true);
+    api.isRefreshing.mockReset();
+    api.getRefreshResult.mockReset();
+    api.getRefreshProgress.mockReset();
+    api.cancelRefresh.mockReset().mockResolvedValue(true);
+    caps.has.mockReset().mockResolvedValue(true);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('stores live progress while the scan runs', async () => {
+    const progress = { running: true, phase: 'searching', startedAt: '', filters: [{ type: 'audio', fetched: 100, total: 400, done: false }], newFiles: 0, indexed: 0, cancelRequested: false };
+    api.getRefreshResult.mockResolvedValue(null);
+    api.isRefreshing.mockResolvedValue(true);
+    api.getRefreshProgress.mockResolvedValue(progress);
+
+    await channelRefreshService.start('42', 'Music', options);
+    await advance(3000);
+    expect(job().progress).toEqual(progress);
+    useChannelRefreshStore.getState().dismiss('42');
+    await advance(3000);
+  });
+
+  it('reports a cancelled scan with a warning, not as a success', async () => {
+    api.getRefreshResult
+      .mockResolvedValueOnce(result('old'))
+      .mockResolvedValue(result('new', { canceled: true, total: 2, audios: 2, videos: 0 }));
+    api.isRefreshing.mockResolvedValueOnce(true).mockResolvedValue(false);
+    api.getRefreshProgress.mockResolvedValue(null);
+
+    await channelRefreshService.start('42', 'Music', options);
+    await channelRefreshService.cancel('42');
+    expect(api.cancelRefresh).toHaveBeenCalledWith('42');
+    expect(job().cancelRequested).toBe(true);
+
+    await advance(3000);
+    await advance(3000);
+    expect(toasts().some((tst) => tst.startsWith('warning:') && tst.includes('2 new files'))).toBe(true);
+    expect(toasts().some((tst) => tst.startsWith('success:'))).toBe(false);
   });
 });
 

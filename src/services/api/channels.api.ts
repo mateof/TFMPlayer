@@ -7,7 +7,8 @@ import type {
   ApiResult,
   ChannelStats,
   ChannelRefreshOptions,
-  ChannelRefreshResult
+  ChannelRefreshResult,
+  ChannelRefreshProgress
 } from '@/types/models';
 
 // The v1 API wraps every payload in { success, data, error, message }
@@ -122,6 +123,25 @@ export const channelsApi = {
     const client = await apiClient.getClient();
     const { data } = await client.get<V1Result<boolean>>(`/api/v1/channels/${id}/refresh`);
     return !!data.data;
+  },
+
+  /** Live progress of a running scan (servers with `channels.refreshProgress`). */
+  async getRefreshProgress(id: number | string): Promise<ChannelRefreshProgress | null> {
+    const client = await apiClient.getClient();
+    const { data } = await client.get<V1Result<ChannelRefreshProgress | null>>(`/api/v1/channels/${id}/refresh/progress`);
+    return data.data ?? null;
+  },
+
+  /** Ask the server to stop a running scan. False when nothing was running (404). */
+  async cancelRefresh(id: number | string): Promise<boolean> {
+    const client = await apiClient.getClient();
+    try {
+      await client.delete(`/api/v1/channels/${id}/refresh`);
+      return true;
+    } catch (error) {
+      if ((error as { response?: { status?: number } }).response?.status === 404) return false;
+      throw error;
+    }
   },
 
   /** Summary of the last finished scan; null when none ran since the server started. */

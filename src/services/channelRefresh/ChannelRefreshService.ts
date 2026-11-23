@@ -1,7 +1,8 @@
 import { create } from 'zustand';
 import { channelsApi } from '@/services/api/channels.api';
 import { useUiStore } from '@/stores/uiStore';
-import type { ChannelRefreshOptions, ChannelRefreshResult } from '@/types/models';
+import { serverCapabilities } from '@/services/server/capabilities';
+import type { ChannelRefreshOptions, ChannelRefreshProgress, ChannelRefreshResult } from '@/types/models';
 import { t } from '@/i18n';
 
 /**
@@ -21,6 +22,9 @@ export interface RefreshJob {
   startedAt: number;
   result?: ChannelRefreshResult | null;
   error?: string;
+  /** Live progress, when the server reports it */
+  progress?: ChannelRefreshProgress | null;
+  cancelRequested?: boolean;
 }
 
 interface ChannelRefreshState {
@@ -130,6 +134,15 @@ async function pollUntilDone(channelId: string, previousFinishedAt: string | nul
 
       if (running) {
         seenRunning = true;
+        if (await serverCapabilities.has('channels.refreshProgress')) {
+          try {
+            const progress = await channelsApi.getRefreshProgress(channelId);
+            const current = store().jobs[channelId];
+            if (current && current.phase === 'running') store().setJob({ ...current, progress });
+          } catch {
+            // progress is a nicety: keep polling the status
+          }
+        }
         continue;
       }
 
@@ -163,6 +176,10 @@ function finish(channelId: string, phase: RefreshPhase, result: ChannelRefreshRe
   setJob({ ...job, phase, result, error });
 
   const { addToast } = useUiStore.getState();
+  if (result?.canceled) {
+    addToast(t('Refresh of "{name}" cancelled: {detail}', { name: job.channelName, detail: describeRefreshResult(result) }), 'warning');
+    return;
+  }
   if (phase === 'failed') {
     const detail = error ?? (result ? t('stopped after {detail}', { detail: describeRefreshResult(result) }) : t('scan failed'));
     addToast(t('Refresh of "{name}" failed: {detail}', { name: job.channelName, detail }), 'error');
@@ -173,6 +190,13 @@ function finish(channelId: string, phase: RefreshPhase, result: ChannelRefreshRe
 }
 
 export const channelRefreshService = {
+  /** Ask the server to stop the scan; the poll loop reports how it ended. */
+  async cancel(channelId: string): Promise<void> {
+    const job = useChannelRefreshStore.getState().jobs[channelId];
+    if (job) useChannelRefreshStore.getState().setJob({ ...job, cancelRequested: true });
+    await channelsApi.cancelRefresh(channelId);
+  },
+
   /** Asks the server to scan the channel and tracks it until it finishes. */
   async start(channelId: string, channelName: string, options: ChannelRefreshOptions): Promise<void> {
     saveRefreshOptions(options);

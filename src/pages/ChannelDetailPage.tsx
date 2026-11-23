@@ -5,6 +5,7 @@ import { Loader2, RefreshCw } from 'lucide-react';
 import { FileBrowser, FILE_PAGE_SIZE, type FileSource, type QueueStartContext } from '@/components/files/FileBrowser';
 import { RefreshChannelDialog } from '@/components/channels/RefreshChannelDialog';
 import { ChannelInfoPanel } from '@/components/channels/ChannelInfoPanel';
+import { RefreshProgressView } from '@/components/channels/RefreshProgressView';
 import { channelsApi } from '@/services/api/channels.api';
 import { channelRefreshService, useChannelRefreshStore } from '@/services/channelRefresh/ChannelRefreshService';
 import { useChannelInfoQuery, useChannelStatsQuery } from '@/hooks/queries';
@@ -144,10 +145,16 @@ export function ChannelDetailPage() {
         }
         banner={
           refreshRunning ? (
-            <div role="status" className="lg:hidden flex items-center gap-2 px-4 py-2 text-xs text-emerald-300 bg-emerald-500/10 border-b border-slate-700">
-              <Loader2 className="w-3.5 h-3.5 animate-spin" aria-hidden />
-              {t('Refreshing channel on the server. The list reloads when it finishes.')}
-            </div>
+            refreshJob?.progress !== undefined ? (
+              <div className="lg:hidden px-4 py-2 bg-emerald-500/10 border-b border-slate-700">
+                <RefreshProgressView job={refreshJob!} compact />
+              </div>
+            ) : (
+              <div role="status" className="lg:hidden flex items-center gap-2 px-4 py-2 text-xs text-emerald-300 bg-emerald-500/10 border-b border-slate-700">
+                <Loader2 className="w-3.5 h-3.5 animate-spin" aria-hidden />
+                {t('Refreshing channel on the server. The list reloads when it finishes.')}
+              </div>
+            )
           ) : undefined
         }
         sidePanel={(filterControls) => (

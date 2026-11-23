@@ -236,4 +236,17 @@ export interface ChannelRefreshResult {
   audios: number;
   documents: number;
   total: number;
+  /** The scan was cancelled; the counts are what got indexed before stopping. */
+  canceled?: boolean;
+}
+
+// Live progress of a running refresh (GET /api/v1/channels/{id}/refresh/progress)
+export interface ChannelRefreshProgress {
+  running: boolean;
+  phase: 'searching' | 'indexing' | 'done';
+  startedAt: string;
+  filters: { type: 'documents' | 'audio' | 'video' | 'photos'; fetched: number; total: number | null; done: boolean }[];
+  newFiles: number;
+  indexed: number;
+  cancelRequested: boolean;
 }
