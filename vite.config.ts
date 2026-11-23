@@ -15,19 +15,11 @@ export default defineConfig({
     'import.meta.env.BUILD_TIMESTAMP': JSON.stringify(new Date().toISOString().replace('T', ' ').slice(0, 19))
   },
   build: {
-    rollupOptions: {
-      output: {
-        // Libraries change far less often than the app: separate chunks stay
-        // cached across releases instead of being downloaded again each time
-        manualChunks(id) {
-          if (!id.includes('node_modules')) return undefined;
-          if (/[\/]node_modules[\/](react|react-dom|react-router|react-router-dom|scheduler)[\/]/.test(id)) return 'vendor-react';
-          if (/[\/]node_modules[\/](@tanstack|dexie|axios|zustand)[\/]/.test(id)) return 'vendor-data';
-          if (/[\/]node_modules[\/]lucide-react[\/]/.test(id)) return 'vendor-icons';
-          return undefined;
-        }
-      }
-    }
+    // No manualChunks: splitting vendors by hand created a circular import
+    // between the react and data chunks (React undefined at startup, blank
+    // page in 1.8.0). Screens are lazy routes already; the main chunk holds
+    // the shell and the libraries.
+    chunkSizeWarningLimit: 700
   },
   plugins: [
     react(),
