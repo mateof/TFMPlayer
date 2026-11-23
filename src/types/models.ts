@@ -192,3 +192,45 @@ export interface AddTrackRequest {
   isLocalFile?: boolean;
   filePath?: string;
 }
+
+// Channel statistics from the v1 API (GET /api/v1/channels/{id})
+export interface ChannelStats {
+  id: number;
+  name: string;
+  type: 'channel' | 'group' | 'chat';
+  isOwner: boolean;
+  isFavorite: boolean;
+  hasDatabase: boolean;
+  fileCount: number;
+  folderCount: number;
+  totalSize: number;
+  totalSizeText: string;
+  audioCount: number;
+  videoCount: number;
+  photoCount: number;
+  documentCount: number;
+  isRefreshing: boolean;
+  canRefresh: boolean;
+}
+
+// Media types the channel index refresh can pick up. Audio is always
+// included from this app, the rest are opt-in.
+export interface ChannelRefreshOptions {
+  includeVideo: boolean;
+  includeDocuments: boolean;
+  includePhotos: boolean;
+  force: boolean;
+}
+
+// What the last finished refresh indexed (GET /api/v1/channels/{id}/refresh/result)
+export interface ChannelRefreshResult {
+  channelId: string;
+  startedAt: string;
+  finishedAt: string;
+  failed: boolean;
+  photos: number;
+  videos: number;
+  audios: number;
+  documents: number;
+  total: number;
+}

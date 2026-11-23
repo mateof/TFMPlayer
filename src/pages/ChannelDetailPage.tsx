@@ -1,22 +1,25 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useParams, useSearchParams, useLocation } from 'react-router-dom';
-import { Music, Folder, Play, Plus, ChevronRight, Download, Search, SlidersHorizontal, X, Loader2, Check, CheckCircle2, Circle } from 'lucide-react';
+import { Music, Folder, Play, Plus, ChevronRight, Download, Search, SlidersHorizontal, X, Loader2, Check, CheckCircle2, Circle, RefreshCw, ListPlus, ListChecks } from 'lucide-react';
 import { Header } from '@/components/layout/Header';
 import { LoadingScreen } from '@/components/common/Spinner';
 import { PlaylistPicker } from '@/components/playlists/PlaylistPicker';
 import { SelectionBar } from '@/components/common/SelectionBar';
+import { RefreshChannelDialog } from '@/components/channels/RefreshChannelDialog';
+import { ChannelInfoPanel } from '@/components/channels/ChannelInfoPanel';
+import { channelRefreshService, useChannelRefreshStore } from '@/services/channelRefresh/ChannelRefreshService';
 import { channelsApi } from '@/services/api/channels.api';
 import { useAudioPlayer } from '@/hooks/useAudioPlayer';
 import { useDebounce } from '@/hooks/useDebounce';
 import { useMultiSelect } from '@/hooks/useMultiSelect';
 import { useUiStore } from '@/stores/uiStore';
 import { usePlayerStore } from '@/stores/playerStore';
-import { formatFileSize } from '@/utils/format';
+import { formatFileSize, formatDate } from '@/utils/format';
 import { fileToTrack, filterFilesByExtension, getApiFilter } from '@/utils/channelTracks';
 import { collectChannelFolderTracks, dedupeTracks, MAX_SELECTION_TRACKS } from '@/utils/collectTracks';
 import { downloadManager, useDownloadStore } from '@/services/download/DownloadManager';
 import { cacheService } from '@/services/cache/CacheService';
-import type { ChannelDetail, ChannelFile, Track } from '@/types/models';
+import type { ChannelDetail, ChannelFile, ChannelStats, Track } from '@/types/models';
 
 const PAGE_SIZE = 50;
 
@@ -54,6 +57,9 @@ export function ChannelDetailPage() {
   const [folderPath, setFolderPath] = useState<FolderBreadcrumb[]>([]);
   const [pickerTracks, setPickerTracks] = useState<Track[] | null>(null);
   const [cachedTrackIds, setCachedTrackIds] = useState<Set<string>>(new Set());
+  const [stats, setStats] = useState<ChannelStats | null>(null);
+  const [showRefreshDialog, setShowRefreshDialog] = useState(false);
+  const refreshJob = useChannelRefreshStore((s) => (id ? s.jobs[id] : undefined));
 
   // Multi-selection (long press to start)
   const selection = useMultiSelect<ChannelFile>(fileKey);
@@ -249,11 +255,40 @@ export function ChannelDetailPage() {
     try {
       const data = await channelsApi.getInfo(parseInt(id!));
       setChannel(data);
+      loadStats(data.name);
     } catch (error) {
       addToast('Failed to load channel', 'error');
       console.error(error);
     }
   };
+
+  // Richer statistics from the v1 API. Optional: older servers lack it.
+  const loadStats = async (channelName?: string) => {
+    try {
+      const data = await channelsApi.getStats(id!);
+      setStats(data);
+      // A scan started elsewhere (web UI, another device): follow it too
+      if (data.isRefreshing) {
+        channelRefreshService.track(id!, channelName || data.name);
+      }
+    } catch (error) {
+      console.warn('Channel statistics unavailable:', error);
+      setStats(null);
+    }
+  };
+
+  // When a refresh of this channel finishes, reload what it may have added
+  const refreshPhase = refreshJob?.phase;
+  const prevRefreshPhaseRef = useRef(refreshPhase);
+  useEffect(() => {
+    const prev = prevRefreshPhaseRef.current;
+    prevRefreshPhaseRef.current = refreshPhase;
+    if (prev === 'running' && refreshPhase && refreshPhase !== 'running') {
+      loadStats(channel?.name);
+      loadFiles(1, true);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [refreshPhase]);
 
   // Files are sorted by the server - no client-side sorting needed
   // When sortBy/sortDesc changes, we reload from page 1 with new sort params
@@ -348,9 +383,18 @@ export function ChannelDetailPage() {
     }
   }, [handleScroll]);
 
-  const handleFileClick = (file: ChannelFile) => {
+  const handleFileClick = (file: ChannelFile, e?: React.MouseEvent) => {
     if (longPressTriggeredRef.current) {
       longPressTriggeredRef.current = false;
+      return;
+    }
+    // Desktop: Ctrl/Cmd+click selects like a file manager
+    if (e && (e.ctrlKey || e.metaKey)) {
+      if (selection.selectionMode) {
+        selection.toggle(file);
+      } else {
+        selection.startWith(file);
+      }
       return;
     }
     // While selecting, a tap toggles instead of playing/navigating
@@ -535,6 +579,13 @@ export function ChannelDetailPage() {
     setPickerTracks([track]);
   };
 
+  const handlePlayNextFile = (file: ChannelFile, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!channel) return;
+    playNext(fileToTrack(file, id!, channel.name));
+    addToast('Will play next', 'success');
+  };
+
   const handleDownload = async (file: ChannelFile, e: React.MouseEvent) => {
     e.stopPropagation();
     if (!channel) return;
@@ -565,288 +616,366 @@ export function ChannelDetailPage() {
     { key: 'type', label: 'Type' }
   ];
 
-  return (
-    <div className="flex flex-col h-screen">
-      <Header
-        title={channel?.name || 'Channel'}
-        subtitle={channel ? `${totalCount} files` : undefined}
-        showBack
-        backPath="/channels"
-      />
+  const chipClass = (active: boolean) =>
+    `px-3 py-1 text-sm rounded-full transition-colors ${
+      active ? 'bg-emerald-500 text-white' : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
+    }`;
 
-      {/* Selection bar replaces the toolbar while selecting */}
-      {selection.selectionMode ? (
-        <SelectionBar
-          count={selection.selectedCount}
-          total={files.length}
-          busy={bulkBusy}
-          busyLabel={bulkLabel}
-          onSelectAll={() => selection.selectAll(files)}
-          onDeselectAll={selection.deselectAll}
-          onAddToPlaylist={handleBulkAddToPlaylist}
-          onDownload={handleBulkDownload}
-          onPlayNext={handleBulkPlayNext}
-          onCancel={selection.exitSelection}
-        />
-      ) : (
-      /* Toolbar */
-      <div className="flex items-center gap-2 px-4 py-2 bg-slate-800 border-b border-slate-700">
-        {/* Search toggle */}
-        <button
-          onClick={() => setShowSearch(!showSearch)}
-          className={`p-2 rounded-lg transition-colors ${showSearch ? 'bg-emerald-500 text-white' : 'bg-slate-700 text-slate-300'}`}
-        >
-          <Search className="w-5 h-5" />
-        </button>
-
-        {/* Filter toggle */}
-        <button
-          onClick={() => setShowFilters(!showFilters)}
-          className={`p-2 rounded-lg transition-colors ${showFilters ? 'bg-emerald-500 text-white' : 'bg-slate-700 text-slate-300'}`}
-        >
-          <SlidersHorizontal className="w-5 h-5" />
-        </button>
-
-        {/* Current filter badge */}
-        <span className="px-3 py-1 text-xs bg-slate-700 rounded-full text-slate-300">
-          {filterOptions.find(f => f.key === filterMode)?.label}
-        </span>
-
-        <div className="flex-1" />
-
-        {/* Play all button */}
-        <button
-          onClick={playAllAudio}
-          className="flex items-center gap-2 px-4 py-2 bg-emerald-500 text-white rounded-lg text-sm font-medium"
-        >
-          <Play className="w-4 h-4" fill="currentColor" />
-          Play All
-        </button>
-      </div>
-      )}
-
-      {/* Search bar */}
-      {showSearch && !selection.selectionMode && (
-        <div className="flex items-center gap-2 px-4 py-2 bg-slate-800 border-b border-slate-700">
-          <Search className="w-5 h-5 text-slate-400" />
-          <input
-            type="text"
-            value={searchText}
-            onChange={(e) => setSearchText(e.target.value)}
-            placeholder="Search files..."
-            className="flex-1 bg-transparent text-white placeholder-slate-400 outline-none"
-            autoFocus
-          />
-          {searchText && (
-            <button onClick={() => setSearchText('')} className="p-1 text-slate-400">
-              <X className="w-4 h-4" />
+  // Filter + sort controls: a toggled panel on mobile, always visible in the
+  // side panel on desktop
+  const filterControls = (
+    <div className="space-y-3">
+      <div>
+        <p className="text-xs text-slate-400 mb-2">Filter</p>
+        <div className="flex flex-wrap gap-2">
+          {filterOptions.filter(opt => opt.group === 'general').map((opt) => (
+            <button key={opt.key} onClick={() => setFilterMode(opt.key)} className={chipClass(filterMode === opt.key)}>
+              {opt.label}
             </button>
-          )}
-        </div>
-      )}
-
-      {/* Filters panel */}
-      {showFilters && !selection.selectionMode && (
-        <div className="px-4 py-3 bg-slate-800 border-b border-slate-700 space-y-3">
-          {/* Filter mode - General */}
-          <div>
-            <p className="text-xs text-slate-400 mb-2">Filter</p>
-            <div className="flex flex-wrap gap-2">
-              {filterOptions.filter(opt => opt.group === 'general').map((opt) => (
-                <button
-                  key={opt.key}
-                  onClick={() => setFilterMode(opt.key)}
-                  className={`px-3 py-1 text-sm rounded-full transition-colors ${
-                    filterMode === opt.key
-                      ? 'bg-emerald-500 text-white'
-                      : 'bg-slate-700 text-slate-300'
-                  }`}
-                >
-                  {opt.label}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {/* Filter mode - Audio Formats */}
-          <div>
-            <p className="text-xs text-slate-400 mb-2">Audio Format</p>
-            <div className="flex flex-wrap gap-2">
-              {filterOptions.filter(opt => opt.group === 'format').map((opt) => (
-                <button
-                  key={opt.key}
-                  onClick={() => setFilterMode(opt.key)}
-                  className={`px-3 py-1 text-sm rounded-full transition-colors ${
-                    filterMode === opt.key
-                      ? 'bg-emerald-500 text-white'
-                      : 'bg-slate-700 text-slate-300'
-                  }`}
-                >
-                  {opt.label}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {/* Sort */}
-          <div>
-            <p className="text-xs text-slate-400 mb-2">Sort by</p>
-            <div className="flex flex-wrap gap-2">
-              {sortOptions.map((opt) => (
-                <button
-                  key={opt.key}
-                  onClick={() => {
-                    if (sortBy === opt.key) {
-                      setSortDesc(!sortDesc);
-                    } else {
-                      setSortBy(opt.key);
-                      setSortDesc(false);
-                    }
-                  }}
-                  className={`px-3 py-1 text-sm rounded-full transition-colors ${
-                    sortBy === opt.key
-                      ? 'bg-emerald-500 text-white'
-                      : 'bg-slate-700 text-slate-300'
-                  }`}
-                >
-                  {opt.label} {sortBy === opt.key && (sortDesc ? '↓' : '↑')}
-                </button>
-              ))}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Breadcrumb */}
-      {folderPath.length > 0 && (
-        <div className="flex items-center gap-2 px-4 py-2 text-sm overflow-x-auto no-scrollbar bg-slate-800/50">
-          <button
-            onClick={() => navigateToFolder(-1)}
-            className="text-emerald-400 hover:underline whitespace-nowrap"
-          >
-            Root
-          </button>
-          {folderPath.map((folder, index) => (
-            <div key={folder.id} className="flex items-center gap-2">
-              <ChevronRight className="w-4 h-4 text-slate-500 flex-shrink-0" />
-              <button
-                onClick={() => navigateToFolder(index)}
-                className={`whitespace-nowrap ${index === folderPath.length - 1 ? 'text-white' : 'text-emerald-400 hover:underline'}`}
-              >
-                {folder.name}
-              </button>
-            </div>
           ))}
         </div>
-      )}
+      </div>
 
-      {/* Files List with infinite scroll */}
-      <div ref={listRef} className="flex-1 overflow-y-auto">
-        {loading ? (
-          <LoadingScreen message="Loading files..." />
-        ) : files.length === 0 ? (
-          <div className="flex flex-col items-center justify-center py-12 text-slate-400">
-            <Folder className="w-12 h-12 mb-4 opacity-50" />
-            <p>No files found</p>
-            <p className="text-sm mt-2">Try changing the filter</p>
+      <div>
+        <p className="text-xs text-slate-400 mb-2">Audio Format</p>
+        <div className="flex flex-wrap gap-2">
+          {filterOptions.filter(opt => opt.group === 'format').map((opt) => (
+            <button key={opt.key} onClick={() => setFilterMode(opt.key)} className={chipClass(filterMode === opt.key)}>
+              {opt.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div>
+        <p className="text-xs text-slate-400 mb-2">Sort by</p>
+        <div className="flex flex-wrap gap-2">
+          {sortOptions.map((opt) => (
+            <button
+              key={opt.key}
+              onClick={() => {
+                if (sortBy === opt.key) {
+                  setSortDesc(!sortDesc);
+                } else {
+                  setSortBy(opt.key);
+                  setSortDesc(false);
+                }
+              }}
+              className={chipClass(sortBy === opt.key)}
+            >
+              {opt.label} {sortBy === opt.key && (sortDesc ? '↓' : '↑')}
+            </button>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+
+  const refreshRunning = refreshJob?.phase === 'running' || (!refreshJob && !!stats?.isRefreshing);
+
+  const fileExtension = (file: ChannelFile) => {
+    if (file.category === 'Folder') return 'Folder';
+    const dot = file.name.lastIndexOf('.');
+    return dot > 0 ? file.name.slice(dot + 1).toUpperCase() : file.type || '';
+  };
+
+  return (
+    <div className="flex flex-col h-screen lg:h-full">
+      <Header
+        title={channel?.name || 'Channel'}
+        subtitle={channel ? `${totalCount} files${stats ? ` · ${stats.totalSizeText} indexed` : ''}` : undefined}
+        showBack
+        backPath="/channels"
+        actions={
+          <button
+            onClick={() => setShowRefreshDialog(true)}
+            disabled={refreshRunning || !channel}
+            className="p-2 text-slate-400 hover:text-white transition-colors disabled:opacity-60"
+            aria-label="Refresh channel"
+            title={refreshRunning ? 'Refreshing channel...' : 'Refresh channel from Telegram'}
+          >
+            <RefreshCw className={`w-5 h-5 ${refreshRunning ? 'animate-spin text-emerald-400' : ''}`} />
+          </button>
+        }
+      />
+
+      <div className="flex-1 min-h-0 flex">
+        {/* Desktop side panel: channel info, refresh and filters */}
+        <aside className="hidden lg:block w-72 xl:w-80 shrink-0 border-r border-slate-700 overflow-y-auto">
+          <ChannelInfoPanel
+            channel={channel}
+            stats={stats}
+            job={refreshJob}
+            onRefresh={() => setShowRefreshDialog(true)}
+          >
+            {filterControls}
+          </ChannelInfoPanel>
+        </aside>
+
+        <div className="flex-1 min-w-0 flex flex-col">
+          {/* Mobile refresh progress */}
+          {refreshRunning && (
+            <div className="lg:hidden flex items-center gap-2 px-4 py-2 text-xs text-emerald-300 bg-emerald-500/10 border-b border-slate-700">
+              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              Refreshing channel on the server. The list reloads when it finishes.
+            </div>
+          )}
+
+          {/* Selection bar replaces the toolbar while selecting */}
+          {selection.selectionMode ? (
+            <SelectionBar
+              count={selection.selectedCount}
+              total={files.length}
+              busy={bulkBusy}
+              busyLabel={bulkLabel}
+              onSelectAll={() => selection.selectAll(files)}
+              onDeselectAll={selection.deselectAll}
+              onAddToPlaylist={handleBulkAddToPlaylist}
+              onDownload={handleBulkDownload}
+              onPlayNext={handleBulkPlayNext}
+              onCancel={selection.exitSelection}
+            />
+          ) : (
+          /* Toolbar */
+          <div className="flex items-center gap-2 px-4 py-2 bg-slate-800 border-b border-slate-700">
+            {/* Search toggle */}
+            <button
+              onClick={() => setShowSearch(!showSearch)}
+              className={`p-2 rounded-lg transition-colors ${showSearch ? 'bg-emerald-500 text-white' : 'bg-slate-700 text-slate-300'}`}
+              title="Search"
+            >
+              <Search className="w-5 h-5" />
+            </button>
+
+            {/* Filter toggle (desktop shows the filters in the side panel) */}
+            <button
+              onClick={() => setShowFilters(!showFilters)}
+              className={`lg:hidden p-2 rounded-lg transition-colors ${showFilters ? 'bg-emerald-500 text-white' : 'bg-slate-700 text-slate-300'}`}
+            >
+              <SlidersHorizontal className="w-5 h-5" />
+            </button>
+
+            {/* Enter selection mode without a long press (mouse users) */}
+            <button
+              onClick={() => files[0] && selection.startWith(files[0])}
+              disabled={files.length === 0}
+              className="hidden lg:flex items-center gap-1.5 px-3 py-2 rounded-lg bg-slate-700 text-slate-300 text-sm hover:bg-slate-600 disabled:opacity-50"
+              title="Select files (or Ctrl+click)"
+            >
+              <ListChecks className="w-4 h-4" />
+              Select
+            </button>
+
+            {/* Current filter badge */}
+            <span className="px-3 py-1 text-xs bg-slate-700 rounded-full text-slate-300">
+              {filterOptions.find(f => f.key === filterMode)?.label}
+            </span>
+
+            <div className="flex-1" />
+
+            {/* Play all button */}
+            <button
+              onClick={playAllAudio}
+              className="flex items-center gap-2 px-4 py-2 bg-emerald-500 text-white rounded-lg text-sm font-medium"
+            >
+              <Play className="w-4 h-4" fill="currentColor" />
+              Play All
+            </button>
           </div>
-        ) : (
-          <>
-            <div className="divide-y divide-slate-700">
-              {files.map((file) => {
-                const selected = selection.isSelected(file);
-                return (
-                <div
-                  key={`${file.category}-${file.id}`}
-                  onClick={() => handleFileClick(file)}
-                  onTouchStart={(e) => handleLongPressStart(file, e)}
-                  onTouchMove={handleLongPressMove}
-                  onTouchEnd={handleLongPressEnd}
-                  onMouseDown={(e) => handleLongPressStart(file, e)}
-                  onMouseUp={handleLongPressEnd}
-                  onMouseLeave={handleLongPressEnd}
-                  className={`w-full flex items-center gap-4 p-4 transition-colors touch-manipulation text-left cursor-pointer select-none ${
-                    selected ? 'bg-emerald-500/15' : 'hover:bg-slate-800'
-                  }`}
-                >
-                  {selection.selectionMode && (
-                    <div className="flex-shrink-0 text-emerald-400">
-                      {selected ? (
-                        <CheckCircle2 className="w-5 h-5" />
-                      ) : (
-                        <Circle className="w-5 h-5 text-slate-500" />
-                      )}
-                    </div>
-                  )}
-                  <div
-                    className={`w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0 relative ${
-                      file.category === 'Folder'
-                        ? 'bg-yellow-500/20 text-yellow-400'
-                        : 'bg-emerald-500/20 text-emerald-400'
-                    }`}
+          )}
+
+          {/* Search bar */}
+          {showSearch && !selection.selectionMode && (
+            <div className="flex items-center gap-2 px-4 py-2 bg-slate-800 border-b border-slate-700">
+              <Search className="w-5 h-5 text-slate-400" />
+              <input
+                type="text"
+                value={searchText}
+                onChange={(e) => setSearchText(e.target.value)}
+                placeholder="Search files..."
+                className="flex-1 bg-transparent text-white placeholder-slate-400 outline-none"
+                autoFocus
+              />
+              {searchText && (
+                <button onClick={() => setSearchText('')} className="p-1 text-slate-400">
+                  <X className="w-4 h-4" />
+                </button>
+              )}
+            </div>
+          )}
+
+          {/* Filters panel (mobile) */}
+          {showFilters && !selection.selectionMode && (
+            <div className="lg:hidden px-4 py-3 bg-slate-800 border-b border-slate-700">
+              {filterControls}
+            </div>
+          )}
+
+          {/* Breadcrumb */}
+          {folderPath.length > 0 && (
+            <div className="flex items-center gap-2 px-4 py-2 text-sm overflow-x-auto no-scrollbar bg-slate-800/50">
+              <button
+                onClick={() => navigateToFolder(-1)}
+                className="text-emerald-400 hover:underline whitespace-nowrap"
+              >
+                Root
+              </button>
+              {folderPath.map((folder, index) => (
+                <div key={folder.id} className="flex items-center gap-2">
+                  <ChevronRight className="w-4 h-4 text-slate-500 flex-shrink-0" />
+                  <button
+                    onClick={() => navigateToFolder(index)}
+                    className={`whitespace-nowrap ${index === folderPath.length - 1 ? 'text-white' : 'text-emerald-400 hover:underline'}`}
                   >
-                    {categoryIcons[file.category] || <Music className="w-5 h-5" />}
-                    {/* Cache indicator */}
-                    {cachedTrackIds.has(file.id) && (
-                      <div className="absolute -bottom-1 -right-1 w-4 h-4 bg-emerald-500 rounded-full flex items-center justify-center">
-                        <Check className="w-2.5 h-2.5 text-white" />
-                      </div>
-                    )}
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm text-white truncate">{file.name}</p>
-                    <p className="text-xs text-slate-400">
-                      {file.category !== 'Folder' && formatFileSize(file.size)}
-                    </p>
-                  </div>
-                  {file.category === 'Audio' && !selection.selectionMode && (
-                    <>
-                      {!cachedTrackIds.has(file.id) && (
-                        activeDownloads.has(file.id) ? (
-                          <span className="p-2 text-amber-400 text-xs tabular-nums">
-                            {activeDownloads.get(file.id)}%
-                          </span>
-                        ) : (
-                          <button
-                            onClick={(e) => handleDownload(file, e)}
-                            className="p-2 text-slate-500 hover:text-emerald-400 transition-colors"
-                            title="Download"
-                          >
-                            <Download className="w-5 h-5" />
-                          </button>
-                        )
-                      )}
-                      <button
-                        onClick={(e) => handleAddToPlaylist(file, e)}
-                        className="p-2 text-slate-500 hover:text-emerald-400 transition-colors"
-                        title="Add to playlist"
-                      >
-                        <Plus className="w-5 h-5" />
-                      </button>
-                    </>
-                  )}
-                  {file.category === 'Folder' && !selection.selectionMode && (
-                    <ChevronRight className="w-5 h-5 text-slate-500" />
-                  )}
+                    {folder.name}
+                  </button>
                 </div>
-                );
-              })}
+              ))}
             </div>
+          )}
 
-            {/* Loading more indicator */}
-            {loadingMore && (
-              <div className="flex items-center justify-center py-4 gap-2 text-slate-400">
-                <Loader2 className="w-5 h-5 animate-spin" />
-                <span className="text-sm">Loading more...</span>
+          {/* Desktop column headers */}
+          {!loading && files.length > 0 && (
+            <div className="hidden lg:flex items-center gap-4 px-4 py-2 text-xs uppercase tracking-wide text-slate-500 border-b border-slate-700">
+              {selection.selectionMode && <span className="w-5 shrink-0" />}
+              <span className="w-10 shrink-0" />
+              <span className="flex-1">Name</span>
+              <span className="w-16 shrink-0">Type</span>
+              <span className="w-20 shrink-0 text-right">Size</span>
+              <span className="hidden xl:block w-28 shrink-0">Date</span>
+              <span className="w-[7.5rem] shrink-0" />
+            </div>
+          )}
+
+          {/* Files List with infinite scroll */}
+          <div ref={listRef} className="flex-1 overflow-y-auto">
+            {loading ? (
+              <LoadingScreen message="Loading files..." />
+            ) : files.length === 0 ? (
+              <div className="flex flex-col items-center justify-center py-12 text-slate-400">
+                <Folder className="w-12 h-12 mb-4 opacity-50" />
+                <p>No files found</p>
+                <p className="text-sm mt-2">Try changing the filter or refreshing the channel</p>
               </div>
-            )}
+            ) : (
+              <>
+                <div className="divide-y divide-slate-700">
+                  {files.map((file) => {
+                    const selected = selection.isSelected(file);
+                    const fileDate = file.dateModified || file.dateCreated;
+                    return (
+                    <div
+                      key={`${file.category}-${file.id}`}
+                      onClick={(e) => handleFileClick(file, e)}
+                      onTouchStart={(e) => handleLongPressStart(file, e)}
+                      onTouchMove={handleLongPressMove}
+                      onTouchEnd={handleLongPressEnd}
+                      onMouseDown={(e) => handleLongPressStart(file, e)}
+                      onMouseUp={handleLongPressEnd}
+                      onMouseLeave={handleLongPressEnd}
+                      className={`group w-full flex items-center gap-4 p-4 lg:py-2.5 transition-colors touch-manipulation text-left cursor-pointer select-none ${
+                        selected ? 'bg-emerald-500/15' : 'hover:bg-slate-800'
+                      }`}
+                    >
+                      {selection.selectionMode && (
+                        <div className="flex-shrink-0 text-emerald-400">
+                          {selected ? (
+                            <CheckCircle2 className="w-5 h-5" />
+                          ) : (
+                            <Circle className="w-5 h-5 text-slate-500" />
+                          )}
+                        </div>
+                      )}
+                      <div
+                        className={`w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0 relative ${
+                          file.category === 'Folder'
+                            ? 'bg-yellow-500/20 text-yellow-400'
+                            : 'bg-emerald-500/20 text-emerald-400'
+                        }`}
+                      >
+                        {categoryIcons[file.category] || <Music className="w-5 h-5" />}
+                        {/* Cache indicator */}
+                        {cachedTrackIds.has(file.id) && (
+                          <div className="absolute -bottom-1 -right-1 w-4 h-4 bg-emerald-500 rounded-full flex items-center justify-center">
+                            <Check className="w-2.5 h-2.5 text-white" />
+                          </div>
+                        )}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm text-white truncate" title={file.name}>{file.name}</p>
+                        <p className="text-xs text-slate-400 lg:hidden">
+                          {file.category !== 'Folder' && formatFileSize(file.size)}
+                        </p>
+                      </div>
 
-            {/* Stats */}
-            <div className="py-3 text-center text-xs text-slate-500">
-              {files.length} of {totalCount} files
-            </div>
-          </>
-        )}
+                      {/* Desktop columns */}
+                      <span className="hidden lg:block w-16 shrink-0 text-xs text-slate-400 truncate">{fileExtension(file)}</span>
+                      <span className="hidden lg:block w-20 shrink-0 text-xs text-slate-400 text-right tabular-nums">
+                        {file.category !== 'Folder' ? formatFileSize(file.size) : ''}
+                      </span>
+                      <span className="hidden xl:block w-28 shrink-0 text-xs text-slate-400 tabular-nums">
+                        {fileDate ? formatDate(fileDate) : ''}
+                      </span>
+
+                      <div className="flex items-center justify-end lg:w-[7.5rem] shrink-0">
+                        {file.category === 'Audio' && !selection.selectionMode && (
+                          <>
+                            <button
+                              onClick={(e) => handlePlayNextFile(file, e)}
+                              className="hidden lg:block p-2 text-slate-500 hover:text-emerald-400 transition-colors lg:opacity-0 lg:group-hover:opacity-100"
+                              title="Play next"
+                            >
+                              <ListPlus className="w-5 h-5" />
+                            </button>
+                            {!cachedTrackIds.has(file.id) && (
+                              activeDownloads.has(file.id) ? (
+                                <span className="p-2 text-amber-400 text-xs tabular-nums">
+                                  {activeDownloads.get(file.id)}%
+                                </span>
+                              ) : (
+                                <button
+                                  onClick={(e) => handleDownload(file, e)}
+                                  className="p-2 text-slate-500 hover:text-emerald-400 transition-colors"
+                                  title="Download"
+                                >
+                                  <Download className="w-5 h-5" />
+                                </button>
+                              )
+                            )}
+                            <button
+                              onClick={(e) => handleAddToPlaylist(file, e)}
+                              className="p-2 text-slate-500 hover:text-emerald-400 transition-colors"
+                              title="Add to playlist"
+                            >
+                              <Plus className="w-5 h-5" />
+                            </button>
+                          </>
+                        )}
+                        {file.category === 'Folder' && !selection.selectionMode && (
+                          <ChevronRight className="w-5 h-5 text-slate-500" />
+                        )}
+                      </div>
+                    </div>
+                    );
+                  })}
+                </div>
+
+                {/* Loading more indicator */}
+                {loadingMore && (
+                  <div className="flex items-center justify-center py-4 gap-2 text-slate-400">
+                    <Loader2 className="w-5 h-5 animate-spin" />
+                    <span className="text-sm">Loading more...</span>
+                  </div>
+                )}
+
+                {/* Stats */}
+                <div className="py-3 text-center text-xs text-slate-500">
+                  {files.length} of {totalCount} files
+                </div>
+              </>
+            )}
+          </div>
+        </div>
       </div>
 
       {/* Playlist Picker Modal (one track or a whole selection) */}
@@ -855,6 +984,15 @@ export function ChannelDetailPage() {
           tracks={pickerTracks}
           onClose={() => setPickerTracks(null)}
           onAdded={selection.exitSelection}
+        />
+      )}
+
+      {showRefreshDialog && channel && (
+        <RefreshChannelDialog
+          channelId={id!}
+          channelName={channel.name}
+          stats={stats}
+          onClose={() => setShowRefreshDialog(false)}
         />
       )}
     </div>

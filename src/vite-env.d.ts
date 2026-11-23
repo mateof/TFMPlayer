@@ -3,6 +3,7 @@
 
 interface ImportMetaEnv {
   readonly BUILD_TIMESTAMP: string;
+  readonly APP_VERSION: string;
 }
 
 interface ImportMeta {

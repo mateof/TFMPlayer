@@ -9,7 +9,7 @@ export function ToastContainer() {
 
   return (
     // z-[60]: must render above the expanded player overlay (z-50)
-    <div className="fixed bottom-20 left-4 right-4 z-[60] flex flex-col gap-2 pointer-events-none">
+    <div className="fixed bottom-20 left-4 right-4 lg:left-auto lg:right-6 lg:bottom-24 lg:w-96 z-[60] flex flex-col gap-2 pointer-events-none">
       {toasts.map((toast) => (
         <Toast key={toast.id} toast={toast} onClose={() => removeToast(toast.id)} />
       ))}

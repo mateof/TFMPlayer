@@ -544,7 +544,7 @@ export function LocalFilesPage() {
   const folderName = currentPath ? currentPath.split(/[/\\]/).pop() || 'Local Files' : 'Local Files';
 
   return (
-    <div className="flex flex-col h-screen">
+    <div className="flex flex-col h-screen lg:h-full">
       <Header
         title={folderName}
         subtitle={`${totalCount} files`}

@@ -421,7 +421,7 @@ export function PlaylistDetailPage() {
 
   if (loading) {
     return (
-      <div className="flex flex-col min-h-screen">
+      <div className="flex flex-col min-h-screen lg:min-h-0">
         <Header title="Playlist" showBack />
         <LoadingScreen message="Loading playlist..." />
       </div>
@@ -430,7 +430,7 @@ export function PlaylistDetailPage() {
 
   if (!playlist) {
     return (
-      <div className="flex flex-col min-h-screen">
+      <div className="flex flex-col min-h-screen lg:min-h-0">
         <Header title="Playlist" showBack />
         <div className="flex-1 flex items-center justify-center">
           <p className="text-slate-400">Playlist not found</p>
@@ -448,7 +448,7 @@ export function PlaylistDetailPage() {
   const cachedCount = cachedTrackIds.size;
 
   return (
-    <div className="flex flex-col h-screen overflow-hidden">
+    <div className="flex flex-col h-screen lg:h-full overflow-hidden">
       <Header title={playlist.name} subtitle={playlist.description} showBack />
 
       {/* Scrollable content */}
@@ -676,7 +676,7 @@ export function PlaylistDetailPage() {
       {showScrollTop && (
         <button
           onClick={scrollToTop}
-          className="fixed bottom-24 right-4 p-3 bg-emerald-500 hover:bg-emerald-600 rounded-full shadow-lg transition-all z-30"
+          className="fixed bottom-24 right-4 lg:bottom-28 lg:right-8 p-3 bg-emerald-500 hover:bg-emerald-600 rounded-full shadow-lg transition-all z-30"
           aria-label="Scroll to top"
         >
           <ChevronUp className="w-5 h-5 text-white" />

@@ -163,7 +163,7 @@ export function ChannelsPage() {
   ) : null;
 
   return (
-    <div className="flex flex-col h-screen overflow-hidden">
+    <div className="flex flex-col h-screen lg:h-full overflow-hidden">
       <Header title="Channels" actions={searchAction} />
 
       {/* Sticky header with search and tabs */}
@@ -207,7 +207,7 @@ export function ChannelsPage() {
             <button
               key={tab.key}
               onClick={() => setActiveTab(tab.key)}
-              className={`flex-1 py-3 text-sm font-medium transition-colors ${
+              className={`flex-1 lg:flex-none lg:px-6 py-3 text-sm font-medium transition-colors ${
                 activeTab === tab.key
                   ? 'text-emerald-400 border-b-2 border-emerald-400'
                   : 'text-slate-400'
@@ -268,25 +268,37 @@ function ChannelList({ channels, onToggleFavorite, onSelect, emptyMessage }: Cha
   }
 
   return (
-    <div className="divide-y divide-slate-700">
+    // One column on mobile, a grid of cards on desktop
+    <div className="divide-y divide-slate-700 lg:divide-y-0 lg:grid lg:grid-cols-2 2xl:grid-cols-3 lg:gap-3 lg:p-4">
       {channels.map((channel) => (
-        <button
+        // div, not button: the favourite toggle inside is a button itself
+        <div
           key={channel.id}
+          role="button"
+          tabIndex={0}
           onClick={() => onSelect(channel)}
-          className="w-full flex items-center gap-4 p-4 hover:bg-slate-800 transition-colors touch-manipulation text-left"
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') onSelect(channel);
+          }}
+          className="w-full flex items-center gap-4 p-4 hover:bg-slate-800 transition-colors touch-manipulation text-left cursor-pointer lg:rounded-xl lg:bg-slate-800/50 lg:border lg:border-slate-700/60"
         >
           <div className="w-12 h-12 bg-slate-700 rounded-full flex items-center justify-center flex-shrink-0">
             <Radio className="w-6 h-6 text-slate-400" />
           </div>
           <div className="flex-1 min-w-0">
-            <p className="font-medium text-white truncate">{channel.name}</p>
+            <p className="font-medium text-white truncate" title={channel.name}>{channel.name}</p>
             <p className="text-sm text-slate-400">
               {channel.fileCount} files
+              <span className="hidden lg:inline">
+                {' · '}<span className="capitalize">{channel.type}</span>
+                {channel.isOwner && ' · owner'}
+              </span>
             </p>
           </div>
           <button
             onClick={(e) => onToggleFavorite(channel, e)}
             className="p-2 touch-manipulation"
+            aria-label={channel.isFavorite ? 'Remove from favorites' : 'Add to favorites'}
           >
             <Star
               className={`w-5 h-5 ${
@@ -297,7 +309,7 @@ function ChannelList({ channels, onToggleFavorite, onSelect, emptyMessage }: Cha
             />
           </button>
           <ChevronRight className="w-5 h-5 text-slate-500" />
-        </button>
+        </div>
       ))}
     </div>
   );

@@ -3,10 +3,15 @@ import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 import { VitePWA } from 'vite-plugin-pwa'
 import path from 'path'
+import { readFileSync } from 'fs'
+
+// Single source of truth for the version shown in Settings
+const pkg = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf-8'))
 
 export default defineConfig({
   base: '/TFMPlayer/',
   define: {
+    'import.meta.env.APP_VERSION': JSON.stringify(pkg.version),
     'import.meta.env.BUILD_TIMESTAMP': JSON.stringify(new Date().toISOString().replace('T', ' ').slice(0, 19))
   },
   plugins: [
@@ -22,7 +27,8 @@ export default defineConfig({
         theme_color: '#10b981',
         background_color: '#0f172a',
         display: 'standalone',
-        orientation: 'portrait',
+        // 'any': the desktop layout uses landscape windows and tablets rotate
+        orientation: 'any',
         start_url: '/TFMPlayer/',
         scope: '/TFMPlayer/',
         icons: [

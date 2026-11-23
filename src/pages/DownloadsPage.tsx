@@ -271,7 +271,7 @@ export function DownloadsPage() {
   ];
 
   return (
-    <div className="flex flex-col min-h-screen">
+    <div className="flex flex-col min-h-screen lg:min-h-0">
       <Header title="Downloads" />
 
       {/* Cache size info */}
