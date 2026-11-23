@@ -5,6 +5,7 @@ import { PersistQueryClientProvider } from '@tanstack/react-query-persist-client
 import { AppShell } from '@/components/layout/AppShell';
 import { LoadingScreen } from '@/components/common/Spinner';
 import { PWAUpdatePrompt } from '@/components/common/PWAUpdatePrompt';
+import { ThemeController } from '@/theme/ThemeController';
 
 import { isServerConfigured, requestPersistentStorage } from '@/db/database';
 import { useSettingsStore } from '@/stores/settingsStore';
@@ -109,6 +110,7 @@ export default function App() {
         }
       }}
     >
+      <ThemeController />
       <BrowserRouter basename={basename}>
         <AppContent />
       </BrowserRouter>

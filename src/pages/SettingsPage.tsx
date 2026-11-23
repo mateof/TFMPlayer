@@ -192,7 +192,7 @@ export function SettingsPage() {
   };
 
   return (
-    <div className="flex flex-col min-h-screen lg:min-h-0">
+    <div className="flex flex-col min-h-full">
       <Header title={t('Settings')} />
 
       <div className="flex-1 overflow-y-auto">
@@ -242,7 +242,7 @@ export function SettingsPage() {
                 }`}
               >
                 <div
-                  className={`w-5 h-5 bg-white rounded-full shadow transition-transform ${
+                  className={`w-5 h-5 bg-[#fff] rounded-full shadow transition-transform ${
                     useHttps ? 'translate-x-6' : 'translate-x-0.5'
                   }`}
                 />
@@ -299,7 +299,7 @@ export function SettingsPage() {
                 }`}
               >
                 <div
-                  className={`w-5 h-5 bg-white rounded-full shadow transition-transform ${
+                  className={`w-5 h-5 bg-[#fff] rounded-full shadow transition-transform ${
                     autoCacheEnabled ? 'translate-x-6' : 'translate-x-0.5'
                   }`}
                 />
@@ -391,7 +391,7 @@ export function SettingsPage() {
                 }`}
               >
                 <div
-                  className={`w-5 h-5 bg-white rounded-full shadow transition-transform ${
+                  className={`w-5 h-5 bg-[#fff] rounded-full shadow transition-transform ${
                     skipButtonsEnabled ? 'translate-x-6' : 'translate-x-0.5'
                   }`}
                 />
@@ -457,7 +457,7 @@ export function SettingsPage() {
                 }`}
               >
                 <div
-                  className={`w-5 h-5 bg-white rounded-full shadow transition-transform ${
+                  className={`w-5 h-5 bg-[#fff] rounded-full shadow transition-transform ${
                     sound.enabled ? 'translate-x-6' : 'translate-x-0.5'
                   }`}
                 />
@@ -563,7 +563,7 @@ export function SettingsPage() {
                     }`}
                   >
                     <div
-                      className={`w-5 h-5 bg-white rounded-full shadow transition-transform ${
+                      className={`w-5 h-5 bg-[#fff] rounded-full shadow transition-transform ${
                         sound.loudness ? 'translate-x-6' : 'translate-x-0.5'
                       }`}
                     />

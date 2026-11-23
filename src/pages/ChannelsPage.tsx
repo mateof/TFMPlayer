@@ -118,7 +118,7 @@ export function ChannelsPage() {
   ) : null;
 
   return (
-    <div className="flex flex-col h-screen lg:h-full overflow-hidden">
+    <div className="flex flex-col h-full overflow-hidden">
       <Header title={t('Channels')} actions={searchAction} />
 
       {/* Sticky header with search and tabs */}

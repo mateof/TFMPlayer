@@ -68,7 +68,7 @@ export function StoragePage() {
   const usedPercent = report?.usage != null && report.quota ? Math.min(100, (report.usage / report.quota) * 100) : null;
 
   return (
-    <div className="flex flex-col min-h-screen lg:min-h-0">
+    <div className="flex flex-col min-h-full">
       <Header title={t('Storage')} subtitle={t('Downloads on this device')} showBack backPath="/downloads" />
 
       {query.isPending || !report ? (

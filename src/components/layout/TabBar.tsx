@@ -12,20 +12,27 @@ const tabs = [
 
 export function TabBar() {
   return (
-    <nav className="fixed bottom-0 left-0 right-0 bg-slate-800 border-t border-slate-700 safe-area-bottom z-40" aria-label={t('Main navigation')}>
+    <nav className="shrink-0 bg-slate-800/95 backdrop-blur border-t border-slate-700 safe-area-bottom z-40" aria-label={t('Main navigation')}>
       <div className="flex justify-around items-center h-16">
         {tabs.map(({ to, icon: Icon, label }) => (
           <NavLink
             key={to}
             to={to}
             className={({ isActive }) =>
-              `flex flex-col items-center justify-center w-full h-full gap-1 transition-colors touch-manipulation ${
+              `flex flex-col items-center justify-center w-full h-full gap-0.5 transition-colors touch-manipulation ${
                 isActive ? 'text-emerald-400' : 'text-slate-400 hover:text-slate-200'
               }`
             }
           >
-            <Icon className="w-5 h-5" aria-hidden />
-            <span className="text-xs">{label}</span>
+            {({ isActive }) => (
+              <>
+                {/* Active tab: icon inside a tinted pill */}
+                <span className={`flex items-center justify-center w-14 h-7 rounded-full transition-colors ${isActive ? 'bg-emerald-500/15' : ''}`}>
+                  <Icon className="w-5 h-5" aria-hidden />
+                </span>
+                <span className={`text-[11px] ${isActive ? 'font-semibold' : ''}`}>{label}</span>
+              </>
+            )}
           </NavLink>
         ))}
       </div>

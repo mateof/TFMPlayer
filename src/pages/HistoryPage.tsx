@@ -54,7 +54,7 @@ export function HistoryPage() {
   ];
 
   return (
-    <div className="flex flex-col h-screen lg:h-full">
+    <div className="flex flex-col h-full">
       <Header
         title={t('History')}
         subtitle={tab === 'top' ? t('Last 90 days') : undefined}

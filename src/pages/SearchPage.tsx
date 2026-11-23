@@ -101,7 +101,7 @@ export function SearchPage() {
   );
 
   return (
-    <div className="flex flex-col min-h-screen lg:min-h-0">
+    <div className="flex flex-col min-h-full">
       <Header title={t('Search')} subtitle={t('Audio in every channel and in local files')} />
 
       <div className="sticky top-14 z-20 bg-slate-900 border-b border-slate-700 px-4 py-3 space-y-3">

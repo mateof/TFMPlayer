@@ -134,7 +134,7 @@ export function SetupPage() {
               }`}
             >
               <div
-                className={`w-5 h-5 bg-white rounded-full shadow transition-transform ${
+                className={`w-5 h-5 bg-[#fff] rounded-full shadow transition-transform ${
                   useHttps ? 'translate-x-6' : 'translate-x-0.5'
                 }`}
               />

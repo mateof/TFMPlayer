@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
+import type { AccentId, BackgroundId } from '@/theme/themes';
 
 // Web Audio DSP chain settings ("sound enhancement")
 export interface SoundEnhancementSettings {
@@ -36,6 +37,11 @@ interface SettingsState {
   crossfadeSeconds: number; // 0 = gapless changeover without fade
   autoCleanDays: number; // Remove downloads not played for N days (0 = never)
   debugLogging: boolean; // Verbose console output (support/debugging)
+  accent: AccentId; // Accent colour theme
+  background: BackgroundId; // Background theme (dark variants or light)
+  dynamicColor: boolean; // Accent follows the playing track's cover
+  ambientBackground: boolean; // Blurred cover behind the player
+  reduceMotion: boolean; // Turn off animations and transitions
 
   setConfigured: (configured: boolean) => void;
   setServerInfo: (host: string, port: number, useHttps: boolean) => void;
@@ -50,6 +56,7 @@ interface SettingsState {
   setCrossfadeSeconds: (seconds: number) => void;
   setAutoCleanDays: (days: number) => void;
   setDebugLogging: (enabled: boolean) => void;
+  setAppearance: (partial: Partial<Pick<SettingsState, 'accent' | 'background' | 'dynamicColor' | 'ambientBackground' | 'reduceMotion'>>) => void;
   clearSettings: () => void;
 }
 
@@ -71,6 +78,11 @@ export const useSettingsStore = create<SettingsState>()(
       crossfadeSeconds: 0,
       autoCleanDays: 0,
       debugLogging: false,
+      accent: 'emerald',
+      background: 'slate',
+      dynamicColor: false,
+      ambientBackground: true,
+      reduceMotion: false,
 
       setConfigured: (configured) => set({ isConfigured: configured }),
       setServerInfo: (host, port, useHttps) =>
@@ -86,6 +98,7 @@ export const useSettingsStore = create<SettingsState>()(
       setCrossfadeSeconds: (seconds) => set({ crossfadeSeconds: Math.max(0, Math.min(12, seconds)) }),
       setAutoCleanDays: (days) => set({ autoCleanDays: Math.max(0, days) }),
       setDebugLogging: (enabled) => set({ debugLogging: enabled }),
+      setAppearance: (partial) => set(partial),
       clearSettings: () =>
         set({ isConfigured: false, serverHost: '', serverPort: 5000, useHttps: false })
     }),

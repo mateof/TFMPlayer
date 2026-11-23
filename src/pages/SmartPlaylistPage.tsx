@@ -82,7 +82,7 @@ export function SmartPlaylistPage() {
 
   if (playlistQuery.isSuccess && !playlist) {
     return (
-      <div className="flex flex-col h-screen lg:h-full">
+      <div className="flex flex-col h-full">
         <Header title={t('Smart playlist')} showBack backPath="/playlists" />
         <p className="p-8 text-center text-slate-400">{t('This smart playlist no longer exists.')}</p>
       </div>
@@ -90,7 +90,7 @@ export function SmartPlaylistPage() {
   }
 
   return (
-    <div className="flex flex-col h-screen lg:h-full">
+    <div className="flex flex-col h-full">
       <Header
         title={playlist?.name ?? t('Smart playlist')}
         showBack

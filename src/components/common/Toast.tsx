@@ -12,7 +12,7 @@ export function ToastContainer() {
     <div
       role="status"
       aria-live="polite"
-      className="fixed bottom-20 left-4 right-4 lg:left-auto lg:right-6 lg:bottom-24 lg:w-96 z-[60] flex flex-col gap-2 pointer-events-none">
+      className="fixed bottom-[calc(8.75rem+env(safe-area-inset-bottom))] left-4 right-4 lg:left-auto lg:right-6 lg:bottom-24 lg:w-96 z-[60] flex flex-col gap-2 pointer-events-none">
       {toasts.map((toast) => (
         <Toast key={toast.id} toast={toast} onClose={() => removeToast(toast.id)} />
       ))}

@@ -2,15 +2,16 @@
 
 /* Custom theme variables */
 :root {
-  --color-primary: #10b981;
-  --color-primary-hover: #059669;
-  --color-background: #0f172a;
-  --color-surface: #1e293b;
-  --color-surface-hover: #334155;
-  --color-border: #334155;
-  --color-text: #f8fafc;
-  --color-text-secondary: #94a3b8;
-  --color-text-muted: #64748b;
+  /* Follow the active theme (ThemeController rewrites the Tailwind scales) */
+  --color-primary: var(--color-emerald-500);
+  --color-primary-hover: var(--color-emerald-600);
+  --color-background: var(--color-slate-900);
+  --color-surface: var(--color-slate-800);
+  --color-surface-hover: var(--color-slate-700);
+  --color-border: var(--color-slate-700);
+  --color-text: var(--color-white);
+  --color-text-secondary: var(--color-slate-400);
+  --color-text-muted: var(--color-slate-500);
   --color-danger: #ef4444;
   --color-warning: #f59e0b;
   --color-success: #10b981;
@@ -130,3 +131,29 @@ input[type="range"].track-transparent::-moz-range-track {
   0%, 100% { height: 25%; }
   50% { height: 100%; }
 }
+
+/* Effects: reduce motion (setting, or the OS preference) */
+html.reduce-motion *,
+html.reduce-motion *::before,
+html.reduce-motion *::after {
+  animation-duration: 0.001ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.001ms !important;
+  scroll-behavior: auto !important;
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}
+
+/* Theme switches animate their colours instead of jumping */
+body {
+  transition: background-color 0.3s ease, color 0.3s ease;
+}
+
+/* Hide scrollbars on horizontal chip rows */
+.no-scrollbar::-webkit-scrollbar { display: none; }
+.no-scrollbar { scrollbar-width: none; }

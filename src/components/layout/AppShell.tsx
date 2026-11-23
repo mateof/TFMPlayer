@@ -27,8 +27,11 @@ export function AppShell() {
 
   if (!isDesktop) {
     return (
-      <div className="flex flex-col min-h-screen bg-slate-900">
-        <main className="flex-1 pb-32 overflow-y-auto">
+      // Mobile: one column whose bars are part of the layout (not fixed on
+      // top of it), so the safe-area inset can never push the tab bar over
+      // the mini player and the end of every list stays reachable
+      <div className="h-dvh flex flex-col bg-slate-900 overflow-hidden">
+        <main className="flex-1 min-h-0 overflow-y-auto">
           <Suspense fallback={<LoadingScreen />}>
             <Outlet />
           </Suspense>

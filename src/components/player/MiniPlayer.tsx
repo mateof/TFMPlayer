@@ -5,6 +5,7 @@ import { getPreloadedRanges } from '@/utils/preload';
 import { useUiStore } from '@/stores/uiStore';
 import { useState, useRef } from 'react';
 import { useCoverArt } from '@/hooks/useCoverArt';
+import { useSettingsStore } from '@/stores/settingsStore';
 import { t } from '@/i18n';
 
 export function MiniPlayer() {
@@ -68,6 +69,7 @@ export function MiniPlayer() {
   };
 
   const coverArt = useCoverArt(currentTrack?.fileId);
+  const ambientBackground = useSettingsStore((s) => s.ambientBackground);
 
   if (!currentTrack) return null;
 
@@ -95,101 +97,104 @@ export function MiniPlayer() {
   };
 
   return (
-    <div
-      onClick={handleOpenPlayer}
-      onTouchStart={handleTouchStart}
-      onTouchMove={handleTouchMove}
-      onTouchEnd={handleTouchEnd}
-      className="fixed bottom-16 left-0 right-0 bg-slate-800 border-t border-slate-700 cursor-pointer z-40 touch-manipulation overflow-hidden"
-    >
-      {/* Progress bar (seekable without opening the full player) */}
+    // Floating card above the tab bar; part of the layout, never overlapped
+    <div className="shrink-0 px-2 pt-1.5 pb-1 bg-slate-900">
       <div
-        className="relative h-1 bg-slate-700"
-        onClick={(e) => e.stopPropagation()}
-      >
-        {/* Preloaded (buffered/cached) highlight */}
-        {getPreloadedRanges(bufferedRanges, cachedPercent, duration).map((range, i) => (
-          <div
-            key={i}
-            className="absolute inset-y-0 bg-slate-500 pointer-events-none"
-            style={{
-              left: `${(range.start / duration) * 100}%`,
-              width: `${((range.end - range.start) / duration) * 100}%`
-            }}
-          />
-        ))}
-        <div
-          className="absolute inset-y-0 left-0 bg-emerald-500 transition-all duration-200 pointer-events-none"
-          style={{ width: `${progress}%` }}
-        />
-        <input
-          type="range"
-          min={0}
-          max={duration || 100}
-          step="any"
-          value={position}
-          onChange={handleSeek}
-          onClick={(e) => e.stopPropagation()}
-          aria-label={t('Seek')}
-          className="absolute left-0 right-0 -top-2 -bottom-2 h-auto w-full opacity-0 cursor-pointer touch-manipulation"
-        />
-      </div>
-
-      <div
-        className="flex items-center h-16 px-4 gap-3"
-        style={{
-          transform: swipeX !== 0 ? `translateX(${swipeX}px)` : undefined,
-          opacity: swipeX !== 0 ? 1 - Math.abs(swipeX) / 250 : 1,
-          transition: swipeAnimating ? 'transform 0.2s ease-out, opacity 0.2s ease-out' : 'none'
+        onClick={handleOpenPlayer}
+        onTouchStart={handleTouchStart}
+        onTouchMove={handleTouchMove}
+        onTouchEnd={handleTouchEnd}
+        role="button"
+        tabIndex={0}
+        aria-label={t('Open full player')}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') setPlayerExpanded(true);
         }}
+        className="relative rounded-2xl overflow-hidden bg-slate-800 shadow-lg shadow-black/30 ring-1 ring-white/5 cursor-pointer touch-manipulation"
       >
-        {/* Album art / icon */}
-        <div className="w-12 h-12 bg-slate-700 rounded-lg flex items-center justify-center shrink-0 overflow-hidden">
-          {coverArt ? (
-            <img src={coverArt} alt={t('Cover')} className="w-full h-full object-cover" />
-          ) : (
-            <Music className="w-6 h-6 text-slate-400" />
-          )}
-        </div>
+        {/* Ambient tint from the cover */}
+        {ambientBackground && coverArt && (
+          <img src={coverArt} alt="" aria-hidden className="absolute inset-0 w-full h-full object-cover scale-150 blur-2xl opacity-40 pointer-events-none" />
+        )}
 
-        {/* Track info */}
-        <div className="flex-1 min-w-0">
-          <p className="text-sm font-medium text-white truncate">
-            {currentTrack.title || currentTrack.fileName}
-          </p>
-          <p className="text-xs text-slate-400 truncate">
-            {currentTrack.artist || currentTrack.channelName}
-          </p>
-        </div>
+        <div
+          className="relative flex items-center h-16 pl-2 pr-1 gap-3"
+          style={{
+            transform: swipeX !== 0 ? `translateX(${swipeX}px)` : undefined,
+            opacity: swipeX !== 0 ? 1 - Math.abs(swipeX) / 250 : 1,
+            transition: swipeAnimating ? 'transform 0.2s ease-out, opacity 0.2s ease-out' : 'none'
+          }}
+        >
+          <div className="w-12 h-12 bg-slate-700 rounded-xl flex items-center justify-center shrink-0 overflow-hidden shadow">
+            {coverArt ? (
+              <img src={coverArt} alt={t('Cover')} className="w-full h-full object-cover" />
+            ) : (
+              <Music className="w-6 h-6 text-slate-400" aria-hidden />
+            )}
+          </div>
 
-        {/* Time */}
-        <span className="text-xs text-slate-400 tabular-nums">
-          {formatDuration(position)} / {formatDuration(duration)}
-        </span>
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-semibold text-white truncate">
+              {currentTrack.title || currentTrack.fileName}
+            </p>
+            <p className="text-xs text-slate-300/80 truncate">
+              {currentTrack.artist || currentTrack.channelName}
+              <span className="hidden min-[400px]:inline tabular-nums text-slate-400">
+                {' · '}{formatDuration(position)} / {formatDuration(duration)}
+              </span>
+            </p>
+          </div>
 
-        {/* Controls */}
-        <div className="flex items-center gap-1">
           <button
             onClick={handlePlayPause}
             disabled={isLoading}
             aria-label={isPlaying ? t('Pause') : t('Play')}
-            className="p-2 text-white hover:text-emerald-400 transition-colors disabled:opacity-50"
+            className="w-11 h-11 rounded-full bg-emerald-500 text-white flex items-center justify-center shrink-0 active:scale-95 transition-transform disabled:opacity-60"
           >
             {isLoading ? (
-              <div className="w-6 h-6 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin" />
+              <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
             ) : isPlaying ? (
-              <Pause className="w-6 h-6" />
+              <Pause className="w-5 h-5" fill="currentColor" aria-hidden />
             ) : (
-              <Play className="w-6 h-6" />
+              <Play className="w-5 h-5 ml-0.5" fill="currentColor" aria-hidden />
             )}
           </button>
           <button
             onClick={handleNext}
             aria-label={t('Next track')}
-            className="p-2 text-slate-400 hover:text-white transition-colors"
+            className="p-2.5 text-slate-300 hover:text-white transition-colors shrink-0"
           >
-            <SkipForward className="w-5 h-5" />
+            <SkipForward className="w-5 h-5" fill="currentColor" aria-hidden />
           </button>
+        </div>
+
+        {/* Progress (seekable without opening the full player) */}
+        <div className="relative h-1 bg-white/10" onClick={(e) => e.stopPropagation()}>
+          {getPreloadedRanges(bufferedRanges, cachedPercent, duration).map((range, i) => (
+            <div
+              key={i}
+              className="absolute inset-y-0 bg-white/20 pointer-events-none"
+              style={{
+                left: `${(range.start / duration) * 100}%`,
+                width: `${((range.end - range.start) / duration) * 100}%`
+              }}
+            />
+          ))}
+          <div
+            className="absolute inset-y-0 left-0 bg-emerald-400 transition-[width] duration-200 pointer-events-none"
+            style={{ width: `${progress}%` }}
+          />
+          <input
+            type="range"
+            min={0}
+            max={duration || 100}
+            step="any"
+            value={position}
+            onChange={handleSeek}
+            onClick={(e) => e.stopPropagation()}
+            aria-label={t('Seek')}
+            className="absolute left-0 right-0 -top-3 -bottom-1 h-auto w-full opacity-0 cursor-pointer touch-manipulation"
+          />
         </div>
       </div>
     </div>

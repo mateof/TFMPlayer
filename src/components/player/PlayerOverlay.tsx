@@ -154,6 +154,7 @@ export function PlayerOverlay() {
 
   // Cover stored with the download, shown until the tags are parsed
   const storedCover = useCoverArt(currentTrack?.fileId);
+  const ambientBackground = useSettingsStore((s) => s.ambientBackground);
 
   // Disable the browser's pull-to-refresh while the player is expanded.
   // Chrome decides PTR at gesture start, before our touchmove preventDefault
@@ -411,7 +412,7 @@ export function PlayerOverlay() {
         aria-label={t('Now playing')}
       >
         {/* Ambient background from the cover */}
-        {cover && (
+        {ambientBackground && cover && (
           <img src={cover} alt="" aria-hidden className="absolute inset-0 w-full h-full object-cover scale-125 blur-3xl opacity-35 pointer-events-none" />
         )}
         <div className="absolute inset-0 bg-gradient-to-b from-slate-950/30 via-slate-950/70 to-slate-950 pointer-events-none" aria-hidden />
@@ -622,6 +623,17 @@ export function PlayerOverlay() {
         transition: dismissDragging ? 'none' : 'transform 0.2s ease-out, opacity 0.2s ease-out'
       }}
     >
+      {ambientBackground && (metadata?.coverArt ?? storedCover) && (
+        <>
+          <img
+            src={(metadata?.coverArt ?? storedCover)!}
+            alt=""
+            aria-hidden
+            className="absolute inset-0 -z-10 w-full h-full object-cover scale-150 blur-3xl opacity-40 pointer-events-none"
+          />
+          <div className="absolute inset-0 -z-10 bg-gradient-to-b from-slate-900/20 via-slate-900/60 to-slate-900 pointer-events-none" aria-hidden />
+        </>
+      )}
       {/* Swipe down indicator */}
       {!showQueue && (
         <div className="absolute top-2 left-1/2 -translate-x-1/2 w-10 h-1 bg-slate-600 rounded-full" />

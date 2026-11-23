@@ -84,7 +84,7 @@ const fileKey = (file: ChannelFile) => `${file.category}:${file.id}`;
 // the player or a subfolder lands where the user was
 const scrollOffsets = new Map<string, number>();
 
-const ROW_HEIGHT_MOBILE = 73;
+const ROW_HEIGHT_MOBILE = 65;
 const ROW_HEIGHT_DESKTOP = 57;
 
 const categoryIcons: Record<string, ReactNode> = {
@@ -369,7 +369,7 @@ export function FileBrowser({
   const loading = query.isPending;
 
   return (
-    <div className="flex flex-col h-screen lg:h-full">
+    <div className="flex flex-col h-full">
       <Header
         title={title}
         subtitle={subtitle ? subtitle(totalCount) : t('{count} files', { count: totalCount })}
@@ -433,7 +433,7 @@ export function FileBrowser({
                 {t('Select')}
               </button>
 
-              <span className="px-3 py-1 text-xs bg-slate-700 rounded-full text-slate-300">
+              <span className="hidden min-[420px]:inline px-3 py-1 text-xs bg-slate-700 rounded-full text-slate-300 whitespace-nowrap truncate">
                 {t(FILTER_OPTIONS.find((f) => f.key === filterMode)?.label ?? '')}
               </span>
 
@@ -441,7 +441,7 @@ export function FileBrowser({
 
               <button
                 onClick={() => startQueue()}
-                className="flex items-center gap-2 px-4 py-2 bg-emerald-500 text-white rounded-lg text-sm font-medium"
+                className="flex items-center gap-2 px-4 py-2 bg-emerald-500 text-white rounded-lg text-sm font-medium whitespace-nowrap shrink-0"
               >
                 <Play className="w-4 h-4" fill="currentColor" aria-hidden />
                 {t('Play All')}
@@ -555,7 +555,7 @@ export function FileBrowser({
                           longPress.bind(file).onDragStart();
                           handleDragStart(file, e);
                         }}
-                        className={`group absolute left-0 top-0 w-full flex items-center gap-4 px-4 py-4 lg:py-2.5 border-b border-slate-700 transition-colors touch-manipulation text-left cursor-pointer select-none outline-none focus-visible:bg-slate-800 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-emerald-400 ${
+                        className={`group absolute left-0 top-0 w-full flex items-center gap-3 lg:gap-4 px-4 py-3 lg:py-2.5 border-b border-slate-700 transition-colors touch-manipulation text-left cursor-pointer select-none outline-none focus-visible:bg-slate-800 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-emerald-400 ${
                           selected ? 'bg-emerald-500/15' : 'hover:bg-slate-800'
                         }`}
                         style={{ transform: `translateY(${virtualRow.start}px)` }}

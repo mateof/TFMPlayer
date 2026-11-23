@@ -1,6 +1,7 @@
 import { Link } from 'react-router-dom';
 import { Blend, Languages, HardDrive, Bug, ChevronRight, History } from 'lucide-react';
 import { useSettingsStore } from '@/stores/settingsStore';
+import { AppearanceSettings } from './AppearanceSettings';
 import { getLanguage, LANGUAGES, setLanguage, t, type Language } from '@/i18n';
 import { setDebugLogging } from '@/utils/logger';
 
@@ -13,7 +14,7 @@ function Toggle({ on, onChange, label }: { on: boolean; onChange: (v: boolean) =
       onClick={() => onChange(!on)}
       className={`w-12 h-6 rounded-full transition-colors shrink-0 ${on ? 'bg-emerald-500' : 'bg-slate-600'}`}
     >
-      <div className={`w-5 h-5 bg-white rounded-full shadow transition-transform ${on ? 'translate-x-6' : 'translate-x-0.5'}`} />
+      <div className={`w-5 h-5 bg-[#fff] rounded-full shadow transition-transform ${on ? 'translate-x-6' : 'translate-x-0.5'}`} />
     </button>
   );
 }
@@ -28,6 +29,10 @@ export function ExtraSettings() {
 
   return (
     <>
+      <AppearanceSettings />
+
+      <div className="h-px bg-slate-700 mx-4" />
+
       <section className="p-4" aria-labelledby="transitions-heading">
         <h2 id="transitions-heading" className="text-sm font-medium text-slate-400 uppercase mb-4">{t('Transitions')}</h2>
         <div className="p-4 bg-slate-800 rounded-lg space-y-3">
