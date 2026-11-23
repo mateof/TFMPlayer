@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { channelsApi } from '@/services/api/channels.api';
 import { useUiStore } from '@/stores/uiStore';
 import type { ChannelRefreshOptions, ChannelRefreshResult } from '@/types/models';
+import { t } from '@/i18n';
 
 /**
  * Tracks channel index refreshes running on TelegramFileManager.
@@ -79,13 +80,16 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const polling = new Set<string>();
 
 export function describeRefreshResult(result: ChannelRefreshResult): string {
-  if (result.total === 0) return 'no new files';
+  if (result.total === 0) return t('no new files');
   const parts: string[] = [];
-  if (result.audios) parts.push(`${result.audios} audio`);
-  if (result.videos) parts.push(`${result.videos} video`);
-  if (result.documents) parts.push(`${result.documents} documents`);
-  if (result.photos) parts.push(`${result.photos} photos`);
-  return `${result.total} new file${result.total === 1 ? '' : 's'} (${parts.join(', ')})`;
+  if (result.audios) parts.push(t('{count} audio', { count: result.audios }));
+  if (result.videos) parts.push(t('{count} video', { count: result.videos }));
+  if (result.documents) parts.push(t('{count} documents', { count: result.documents }));
+  if (result.photos) parts.push(t('{count} photos', { count: result.photos }));
+  return t(result.total === 1 ? '{count} new file ({details})' : '{count} new files ({details})', {
+    count: result.total,
+    details: parts.join(', ')
+  });
 }
 
 async function readFinishedAt(channelId: string): Promise<string | null> {
@@ -118,7 +122,7 @@ async function pollUntilDone(channelId: string, previousFinishedAt: string | nul
         errors = 0;
       } catch {
         if (++errors >= MAX_CONSECUTIVE_ERRORS) {
-          finish(channelId, 'failed', null, 'Lost contact with the server');
+          finish(channelId, 'failed', null, t('Lost contact with the server'));
           return;
         }
         continue;
@@ -160,11 +164,11 @@ function finish(channelId: string, phase: RefreshPhase, result: ChannelRefreshRe
 
   const { addToast } = useUiStore.getState();
   if (phase === 'failed') {
-    const detail = error ?? (result ? `stopped after ${describeRefreshResult(result)}` : 'scan failed');
-    addToast(`Refresh of "${job.channelName}" failed: ${detail}`, 'error');
+    const detail = error ?? (result ? t('stopped after {detail}', { detail: describeRefreshResult(result) }) : t('scan failed'));
+    addToast(t('Refresh of "{name}" failed: {detail}', { name: job.channelName, detail }), 'error');
   } else {
-    const detail = result ? describeRefreshResult(result) : 'finished';
-    addToast(`"${job.channelName}" refreshed: ${detail}`, 'success');
+    const detail = result ? describeRefreshResult(result) : t('finished');
+    addToast(t('"{name}" refreshed: {detail}', { name: job.channelName, detail }), 'success');
   }
 }
 
@@ -183,7 +187,7 @@ export const channelRefreshService = {
     });
 
     if (!started) {
-      useUiStore.getState().addToast('A refresh was already running, following it', 'info');
+      useUiStore.getState().addToast(t('A refresh was already running, following it'), 'info');
     }
     void pollUntilDone(channelId, previousFinishedAt);
   },

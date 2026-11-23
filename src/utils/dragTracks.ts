@@ -1,5 +1,6 @@
 import { collectChannelFolderTracks, collectLocalFolderTracks, dedupeTracks } from '@/utils/collectTracks';
 import type { Track } from '@/types/models';
+import { t } from '@/i18n';
 
 /**
  * Desktop drag and drop of tracks onto playlists. Folders travel as a
@@ -56,10 +57,10 @@ export async function resolveDragPayload(
     if (item.kind === 'track') {
       tracks.push(item.track);
     } else if (item.kind === 'channel-folder') {
-      onProgress?.(`Scanning "${item.name}"...`);
+      onProgress?.(t('Scanning "{name}"...', { name: item.name }));
       tracks.push(...await collectChannelFolderTracks(item.channelId, item.channelName, item.folderId));
     } else {
-      onProgress?.(`Scanning "${item.name}"...`);
+      onProgress?.(t('Scanning "{name}"...', { name: item.name }));
       tracks.push(...await collectLocalFolderTracks(item.path));
     }
   }

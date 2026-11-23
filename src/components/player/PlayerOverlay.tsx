@@ -15,14 +15,16 @@ import {
   X,
   Loader2,
   Activity,
-  GripVertical,
   RotateCcw,
-  RotateCw
+  RotateCw,
+  Info,
+  AudioLines,
+  Minimize2
 } from 'lucide-react';
 import { useAudioPlayer } from '@/hooks/useAudioPlayer';
 import { formatDuration, formatFileSize } from '@/utils/format';
 import { getPreloadedRanges } from '@/utils/preload';
-import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import { PlaylistPicker } from '@/components/playlists/PlaylistPicker';
 import { useUiStore } from '@/stores/uiStore';
 import { usePlayerStore } from '@/stores/playerStore';
@@ -30,8 +32,12 @@ import { useSettingsStore } from '@/stores/settingsStore';
 import { audioMetadataService, type AudioMetadata } from '@/services/audio/AudioMetadataService';
 import { audioPlayer } from '@/services/audio/AudioPlayerService';
 import { cacheService } from '@/services/cache/CacheService';
-import { loadNextQueuePage } from '@/services/queue/QueueSourceService';
 import { AudioEqualizer } from './AudioEqualizer';
+import { QueueList } from './QueueList';
+import { SleepTimerButton } from './SleepTimerButton';
+import { useMediaQuery, DESKTOP_QUERY } from '@/hooks/useMediaQuery';
+import { useCoverArt } from '@/hooks/useCoverArt';
+import { t } from '@/i18n';
 
 // Swipe gesture hook
 function useSwipeGesture({
@@ -106,22 +112,18 @@ export function PlayerOverlay() {
   const setPlayerExpanded = useUiStore((s) => s.setPlayerExpanded);
   const showEqualizer = usePlayerStore((s) => s.showEqualizer);
   const toggleEqualizer = usePlayerStore((s) => s.toggleEqualizer);
-  const moveInQueue = usePlayerStore((s) => s.moveInQueue);
-  const queueSource = usePlayerStore((s) => s.queueSource);
   const skipButtonsEnabled = useSettingsStore((s) => s.skipButtonsEnabled);
   const skipBackSeconds = useSettingsStore((s) => s.skipBackSeconds);
   const skipForwardSeconds = useSettingsStore((s) => s.skipForwardSeconds);
   const [showQueue, setShowQueue] = useState(false);
-  const [loadingMoreQueue, setLoadingMoreQueue] = useState(false);
   const [showPlaylistPicker, setShowPlaylistPicker] = useState(false);
   // Start flipped to the equalizer when the user left it open last time
   const [isFlipped, setIsFlipped] = useState(() => usePlayerStore.getState().showEqualizer);
   const [metadata, setMetadata] = useState<AudioMetadata | null>(null);
   const [loadingMetadata, setLoadingMetadata] = useState(false);
   const [coverArts, setCoverArts] = useState<Record<string, string>>({});
-  const [draggedIndex, setDraggedIndex] = useState<number | null>(null);
-  const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
-  const queueListRef = useRef<HTMLDivElement>(null);
+  const isDesktop = useMediaQuery(DESKTOP_QUERY);
+  const [desktopTab, setDesktopTab] = useState<'queue' | 'details' | 'visualizer'>('queue');
 
   const {
     currentTrack,
@@ -143,13 +145,15 @@ export function PlayerOverlay() {
     seek,
     setVolume,
     toggleShuffle,
-    cycleRepeatMode,
-    playAtIndex
+    cycleRepeatMode
   } = useAudioPlayer();
 
   const handleClose = () => {
     setPlayerExpanded(false);
   };
+
+  // Cover stored with the download, shown until the tags are parsed
+  const storedCover = useCoverArt(currentTrack?.fileId);
 
   // Disable the browser's pull-to-refresh while the player is expanded.
   // Chrome decides PTR at gesture start, before our touchmove preventDefault
@@ -257,37 +261,9 @@ export function PlayerOverlay() {
     setVolume(parseFloat(e.target.value));
   };
 
-  // Infinite scroll in the queue: page in more tracks from the queue's source
-  const handleQueueScroll = async (e: React.UIEvent<HTMLDivElement>) => {
-    const el = e.currentTarget;
-    if (!queueSource?.hasMore || loadingMoreQueue) return;
-
-    const threshold = 200; // px from bottom
-    if (el.scrollHeight - el.scrollTop - el.clientHeight < threshold) {
-      setLoadingMoreQueue(true);
-      try {
-        await loadNextQueuePage();
-      } catch (error) {
-        console.warn('Failed to load more queue tracks:', error);
-      } finally {
-        setLoadingMoreQueue(false);
-      }
-    }
-  };
-
   const toggleMute = () => {
     setVolume(volume > 0 ? 0 : 1);
   };
-
-  // Scroll to current song when queue is shown
-  useEffect(() => {
-    if (showQueue && queueListRef.current && currentIndex >= 0) {
-      const currentItem = queueListRef.current.querySelector(`[data-index="${currentIndex}"]`);
-      if (currentItem) {
-        currentItem.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      }
-    }
-  }, [showQueue, currentIndex]);
 
   // Load metadata when track changes (keyed on the id: the track object is
   // replaced when its tags are filled in, which must not restart the load)
@@ -347,7 +323,7 @@ export function PlayerOverlay() {
   const coverArtsRequestedRef = useRef<Set<string>>(new Set());
   useEffect(() => {
     const missing = queue
-      .map((t) => t.fileId)
+      .map((track) => track.fileId)
       .filter((id) => !coverArtsRequestedRef.current.has(id));
     if (missing.length === 0) return;
     missing.forEach((id) => coverArtsRequestedRef.current.add(id));
@@ -360,39 +336,6 @@ export function PlayerOverlay() {
       }
     }).catch(() => {});
   }, [queue]);
-
-  // Drag and drop handlers for queue reordering
-  const handleDragStart = useCallback((e: React.DragEvent, index: number) => {
-    setDraggedIndex(index);
-    e.dataTransfer.effectAllowed = 'move';
-    e.dataTransfer.setData('text/plain', index.toString());
-  }, []);
-
-  const handleDragOver = useCallback((e: React.DragEvent, index: number) => {
-    e.preventDefault();
-    e.dataTransfer.dropEffect = 'move';
-    setDragOverIndex(index);
-  }, []);
-
-  const handleDragLeave = useCallback(() => {
-    setDragOverIndex(null);
-  }, []);
-
-  const handleDrop = useCallback((e: React.DragEvent, toIndex: number) => {
-    e.preventDefault();
-    const fromIndex = draggedIndex;
-    setDraggedIndex(null);
-    setDragOverIndex(null);
-
-    if (fromIndex !== null && fromIndex !== toIndex) {
-      moveInQueue(fromIndex, toIndex);
-    }
-  }, [draggedIndex, moveInQueue]);
-
-  const handleDragEnd = useCallback(() => {
-    setDraggedIndex(null);
-    setDragOverIndex(null);
-  }, []);
 
   const handleFlip = () => {
     setIsFlipped(!isFlipped);
@@ -418,12 +361,12 @@ export function PlayerOverlay() {
     return (
       <div className="fixed inset-0 z-50 flex flex-col items-center justify-center p-6 bg-slate-900">
         <Music className="w-16 h-16 text-slate-600 mb-4" />
-        <p className="text-slate-400">No track playing</p>
+        <p className="text-slate-400">{t('No track playing')}</p>
         <button
           onClick={handleClose}
           className="mt-4 text-emerald-400 hover:underline"
         >
-          Go back
+          {t('Go back')}
         </button>
       </div>
     );
@@ -444,6 +387,230 @@ export function PlayerOverlay() {
     // Vertical drags are handled by the overlay-wide dismiss gesture
     return {};
   };
+
+  if (isDesktop) {
+    const cover = metadata?.coverArt ?? storedCover;
+    const techChips = [
+      metadata?.format?.toUpperCase(),
+      metadata?.bitrate ? `${metadata.bitrate} kbps` : null,
+      metadata?.sampleRate ? `${(metadata.sampleRate / 1000).toFixed(1)} kHz` : null,
+      metadata?.bitsPerSample ? `${metadata.bitsPerSample} bit` : null
+    ].filter(Boolean) as string[];
+    const repeatLabel = repeatMode === 'one' ? t('This track') : repeatMode === 'all' ? t('All tracks') : t('Off');
+    const tabs: { key: typeof desktopTab; label: string; icon: React.ReactNode }[] = [
+      { key: 'queue', label: t('Up next'), icon: <ListMusic className="w-4 h-4" aria-hidden /> },
+      { key: 'details', label: t('Details'), icon: <Info className="w-4 h-4" aria-hidden /> },
+      { key: 'visualizer', label: t('Visualizer'), icon: <AudioLines className="w-4 h-4" aria-hidden /> }
+    ];
+
+    return (
+      <div
+        className="fixed inset-0 z-50 flex flex-col bg-slate-950 text-white overflow-hidden animate-in fade-in duration-200"
+        role="dialog"
+        aria-modal="true"
+        aria-label={t('Now playing')}
+      >
+        {/* Ambient background from the cover */}
+        {cover && (
+          <img src={cover} alt="" aria-hidden className="absolute inset-0 w-full h-full object-cover scale-125 blur-3xl opacity-35 pointer-events-none" />
+        )}
+        <div className="absolute inset-0 bg-gradient-to-b from-slate-950/30 via-slate-950/70 to-slate-950 pointer-events-none" aria-hidden />
+
+        <header className="relative flex items-center gap-3 px-8 h-16 shrink-0">
+          <button
+            onClick={handleClose}
+            className="p-2 rounded-full text-slate-300 hover:text-white hover:bg-white/10"
+            aria-label={t('Minimize player (Esc)')}
+            title={t('Minimize player (Esc)')}
+          >
+            <Minimize2 className="w-5 h-5" aria-hidden />
+          </button>
+          <div className="flex-1 min-w-0">
+            <p className="text-[11px] uppercase tracking-[0.2em] text-slate-400">{t('Now playing')}</p>
+            <p className="text-sm text-slate-200 truncate">
+              {currentTrack.isLocalFile ? t('Local files') : currentTrack.channelName}
+              {queue.length > 1 && <span className="text-slate-500"> · {t('{n} of {total}', { n: currentIndex + 1, total: queue.length })}</span>}
+            </p>
+          </div>
+          <SleepTimerButton size="lg" />
+          <button
+            onClick={() => setShowPlaylistPicker(true)}
+            className="p-2 rounded-full text-slate-300 hover:text-white hover:bg-white/10"
+            aria-label={t('Add to playlist')}
+            title={t('Add to playlist')}
+          >
+            <Plus className="w-5 h-5" aria-hidden />
+          </button>
+        </header>
+
+        <div className="relative flex-1 min-h-0 grid grid-cols-[minmax(0,1fr)_minmax(22rem,0.75fr)] 2xl:grid-cols-[minmax(0,1fr)_minmax(26rem,0.7fr)] gap-10 px-10 pb-8">
+          {/* Left: artwork and controls */}
+          <section className="min-h-0 flex flex-col items-center justify-center gap-6" aria-label={t('Player')}>
+            <div className="w-full max-w-[min(50vh,32rem)] aspect-square rounded-3xl overflow-hidden shadow-[0_30px_80px_-20px_rgba(0,0,0,0.8)] bg-slate-800/80 flex items-center justify-center ring-1 ring-white/10">
+              {cover ? (
+                <img src={cover} alt={t('Cover')} className="w-full h-full object-cover" />
+              ) : (
+                <Music className="w-28 h-28 text-slate-600" aria-hidden />
+              )}
+            </div>
+
+            <div className="w-full max-w-2xl text-center">
+              <h1 className="text-3xl 2xl:text-4xl font-bold tracking-tight truncate" title={currentTrack.fileName}>
+                {metadata?.title || currentTrack.title || currentTrack.fileName}
+              </h1>
+              <p className="mt-2 text-lg text-slate-300 truncate">
+                {[metadata?.artist || currentTrack.artist, metadata?.album || currentTrack.album].filter(Boolean).join(' · ') || t('Unknown artist')}
+              </p>
+              {techChips.length > 0 && (
+                <div className="mt-3 flex flex-wrap justify-center gap-2">
+                  {techChips.map((chip) => (
+                    <span key={chip} className="px-2 py-0.5 rounded-md bg-white/10 text-xs text-slate-300 tabular-nums">{chip}</span>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div className="w-full max-w-2xl">
+              <div className="relative flex items-center">
+                <div className="absolute inset-x-0 top-1/2 -translate-y-1/2 h-1.5 rounded-full bg-white/15 overflow-hidden pointer-events-none">
+                  {getPreloadedRanges(bufferedRanges, cachedPercent, duration).map((range, i) => (
+                    <div
+                      key={i}
+                      className="absolute inset-y-0 bg-white/25"
+                      style={{ left: `${(range.start / duration) * 100}%`, width: `${((range.end - range.start) / duration) * 100}%` }}
+                    />
+                  ))}
+                  <div className="absolute inset-y-0 left-0 bg-emerald-400" style={{ width: `${duration > 0 ? (position / duration) * 100 : 0}%` }} />
+                </div>
+                <input
+                  type="range"
+                  min={0}
+                  max={duration || 100}
+                  step="any"
+                  value={position}
+                  onChange={handleSeek}
+                  aria-label={t('Seek')}
+                  className="w-full relative track-transparent"
+                />
+              </div>
+              <div className="flex justify-between mt-1.5 text-xs text-slate-400 tabular-nums">
+                <span>{formatDuration(position)}</span>
+                <span>-{formatDuration(Math.max(0, duration - position))}</span>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-4">
+              <button
+                onClick={toggleShuffle}
+                aria-pressed={shuffle}
+                aria-label={t('Shuffle')}
+                title={t('Shuffle')}
+                className={`p-3 rounded-full transition-colors ${shuffle ? 'text-emerald-400' : 'text-slate-400 hover:text-white'}`}
+              >
+                <Shuffle className="w-5 h-5" aria-hidden />
+              </button>
+              {skipButtonsEnabled && (
+                <button
+                  onClick={() => seek(Math.max(0, position - skipBackSeconds))}
+                  className="p-3 rounded-full text-slate-300 hover:text-white"
+                  aria-label={t('Back {count} seconds', { count: skipBackSeconds })}
+                >
+                  <RotateCcw className="w-6 h-6" aria-hidden />
+                </button>
+              )}
+              <button onClick={previous} className="p-3 rounded-full text-white hover:bg-white/10" aria-label={t('Previous track')} title={t('Previous (Shift+←)')}>
+                <SkipBack className="w-8 h-8" fill="currentColor" aria-hidden />
+              </button>
+              <button
+                onClick={togglePlayPause}
+                disabled={isLoading}
+                aria-label={isPlaying ? t('Pause') : t('Play')}
+                title={t('Play/Pause (Space)')}
+                className="w-20 h-20 rounded-full bg-white text-slate-900 flex items-center justify-center shadow-xl hover:scale-105 active:scale-95 transition-transform disabled:opacity-60"
+              >
+                {isLoading ? (
+                  <div className="w-8 h-8 border-[3px] border-slate-900 border-t-transparent rounded-full animate-spin" />
+                ) : isPlaying ? (
+                  <Pause className="w-9 h-9" fill="currentColor" aria-hidden />
+                ) : (
+                  <Play className="w-9 h-9 ml-1" fill="currentColor" aria-hidden />
+                )}
+              </button>
+              <button onClick={() => next()} className="p-3 rounded-full text-white hover:bg-white/10" aria-label={t('Next track')} title={t('Next (Shift+→)')}>
+                <SkipForward className="w-8 h-8" fill="currentColor" aria-hidden />
+              </button>
+              {skipButtonsEnabled && (
+                <button
+                  onClick={() => seek(position + skipForwardSeconds)}
+                  className="p-3 rounded-full text-slate-300 hover:text-white"
+                  aria-label={t('Forward {count} seconds', { count: skipForwardSeconds })}
+                >
+                  <RotateCw className="w-6 h-6" aria-hidden />
+                </button>
+              )}
+              <button
+                onClick={cycleRepeatMode}
+                aria-label={t('Repeat: {mode}', { mode: repeatLabel })}
+                title={t('Repeat: {mode}', { mode: repeatLabel })}
+                className={`p-3 rounded-full transition-colors ${repeatMode !== 'none' ? 'text-emerald-400' : 'text-slate-400 hover:text-white'}`}
+              >
+                {repeatMode === 'one' ? <Repeat1 className="w-5 h-5" aria-hidden /> : <Repeat className="w-5 h-5" aria-hidden />}
+              </button>
+            </div>
+
+            <div className="w-full max-w-xs flex items-center gap-3">
+              <button onClick={toggleMute} className="text-slate-400 hover:text-white" aria-label={volume === 0 ? t('Unmute') : t('Mute')}>
+                {volume === 0 ? <VolumeX className="w-5 h-5" aria-hidden /> : <Volume2 className="w-5 h-5" aria-hidden />}
+              </button>
+              <input type="range" min={0} max={1} step={0.01} value={volume} onChange={handleVolumeChange} aria-label={t('Volume')} className="flex-1" />
+            </div>
+          </section>
+
+          {/* Right: queue / details / visualizer */}
+          <section className="min-h-0 flex flex-col rounded-3xl bg-white/[0.06] backdrop-blur-xl ring-1 ring-white/10 overflow-hidden">
+            <div role="tablist" aria-label={t('Player panels')} className="flex gap-1 p-2 border-b border-white/10">
+              {tabs.map((tab) => (
+                <button
+                  key={tab.key}
+                  role="tab"
+                  aria-selected={desktopTab === tab.key}
+                  onClick={() => setDesktopTab(tab.key)}
+                  className={`flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-xl text-sm transition-colors ${
+                    desktopTab === tab.key ? 'bg-white/15 text-white' : 'text-slate-400 hover:text-white hover:bg-white/5'
+                  }`}
+                >
+                  {tab.icon}
+                  {tab.label}
+                  {tab.key === 'queue' && <span className="text-xs text-slate-500 tabular-nums">{queue.length}</span>}
+                </button>
+              ))}
+            </div>
+            <div role="tabpanel" className="flex-1 min-h-0 flex flex-col">
+              {desktopTab === 'queue' && (
+                <div className="flex-1 min-h-0 flex flex-col p-2">
+                  <QueueList coverArts={coverArts} active={desktopTab === 'queue'} />
+                </div>
+              )}
+              {desktopTab === 'details' && (
+                <div className="flex-1 min-h-0 overflow-y-auto p-6">
+                  <TrackDetails metadata={metadata} loading={loadingMetadata} fileName={currentTrack.fileName} />
+                </div>
+              )}
+              {desktopTab === 'visualizer' && (
+                <div className="flex-1 min-h-0">
+                  <AudioEqualizer isPlaying={isPlaying} />
+                </div>
+              )}
+            </div>
+          </section>
+        </div>
+
+        {showPlaylistPicker && (
+          <PlaylistPicker tracks={[currentTrack]} onClose={() => setShowPlaylistPicker(false)} />
+        )}
+      </div>
+    );
+  }
 
   return (
     <div
@@ -467,13 +634,13 @@ export function PlayerOverlay() {
           <>
             <div className="w-10" /> {/* Spacer for balance */}
             <div className="text-center">
-              <p className="text-xs text-slate-400 uppercase">Queue</p>
-              <p className="text-sm text-white">{queue.length} tracks</p>
+              <p className="text-xs text-slate-400 uppercase">{t('Queue')}</p>
+              <p className="text-sm text-white">{t('{count} tracks', { count: queue.length })}</p>
             </div>
             <button
               onClick={() => setShowQueue(false)}
               className="p-2 text-slate-400 hover:text-white transition-colors"
-              title="Close queue"
+              title={t('Close queue')}
             >
               <X className="w-6 h-6" />
             </button>
@@ -488,23 +655,24 @@ export function PlayerOverlay() {
               <ChevronDown className="w-6 h-6" />
             </button>
             <div className="text-center">
-              <p className="text-xs text-slate-400 uppercase">Now Playing</p>
+              <p className="text-xs text-slate-400 uppercase">{t('Now playing')}</p>
               <p className="text-sm text-white truncate max-w-[200px]">
                 {currentTrack.channelName}
               </p>
             </div>
             <div className="flex items-center gap-1">
+              <SleepTimerButton />
               <button
                 onClick={toggleEqualizer}
                 className={`p-2 transition-colors ${showEqualizer ? 'text-emerald-400' : 'text-slate-400 hover:text-white'}`}
-                title="Toggle equalizer"
+                title={t('Toggle equalizer')}
               >
                 <Activity className="w-5 h-5" />
               </button>
               <button
                 onClick={() => setShowPlaylistPicker(true)}
                 className="p-2 text-slate-400 hover:text-white transition-colors"
-                title="Add to playlist"
+                title={t('Add to playlist')}
               >
                 <Plus className="w-5 h-5" />
               </button>
@@ -520,88 +688,8 @@ export function PlayerOverlay() {
       </header>
 
       {showQueue ? (
-        // Queue View - overscroll-none prevents pull-to-refresh
-        <div
-          ref={queueListRef}
-          onScroll={handleQueueScroll}
-          data-no-dismiss
-          className="flex-1 overflow-y-auto px-4 overscroll-none"
-        >
-          <div className="space-y-2 pb-4">
-            {queue.map((track, index) => (
-              <div
-                key={`${track.fileId}-${index}`}
-                data-index={index}
-                draggable
-                onDragStart={(e) => handleDragStart(e, index)}
-                onDragOver={(e) => handleDragOver(e, index)}
-                onDragLeave={handleDragLeave}
-                onDrop={(e) => handleDrop(e, index)}
-                onDragEnd={handleDragEnd}
-                className={`w-full flex items-center gap-2 p-3 rounded-lg transition-all cursor-grab active:cursor-grabbing ${
-                  index === currentIndex
-                    ? 'bg-emerald-500/20 border border-emerald-500/50'
-                    : 'bg-slate-800 hover:bg-slate-700'
-                } ${draggedIndex === index ? 'opacity-50 scale-95' : ''} ${
-                  dragOverIndex === index && draggedIndex !== index
-                    ? 'border-t-2 border-emerald-400'
-                    : ''
-                }`}
-              >
-                <div className="text-slate-500 cursor-grab active:cursor-grabbing touch-none">
-                  <GripVertical className="w-4 h-4" />
-                </div>
-                <span className="w-6 text-center text-slate-400 text-sm">
-                  {index + 1}
-                </span>
-                <div
-                  className="w-10 h-10 bg-slate-700 rounded flex items-center justify-center flex-shrink-0 overflow-hidden"
-                  onClick={() => playAtIndex(index)}
-                >
-                  {coverArts[track.fileId] ? (
-                    <img
-                      src={coverArts[track.fileId]}
-                      alt="Cover"
-                      className="w-full h-full object-cover"
-                    />
-                  ) : (
-                    <Music className="w-5 h-5 text-slate-400" />
-                  )}
-                </div>
-                <div
-                  className="flex-1 min-w-0 text-left cursor-pointer"
-                  onClick={() => playAtIndex(index)}
-                >
-                  <p className={`text-sm truncate ${index === currentIndex ? 'text-emerald-400' : 'text-white'}`}>
-                    {track.title || track.fileName}
-                  </p>
-                  <p className="text-xs text-slate-400 truncate">
-                    {track.artist || track.channelName}
-                  </p>
-                </div>
-                {index === currentIndex && isPlaying && (
-                  <div className="flex gap-0.5">
-                    <div className="w-1 h-4 bg-emerald-400 animate-pulse" />
-                    <div className="w-1 h-4 bg-emerald-400 animate-pulse delay-75" />
-                    <div className="w-1 h-4 bg-emerald-400 animate-pulse delay-150" />
-                  </div>
-                )}
-              </div>
-            ))}
-
-            {/* Infinite scroll: more tracks available from the channel */}
-            {loadingMoreQueue && (
-              <div className="flex items-center justify-center py-3 gap-2 text-slate-400">
-                <Loader2 className="w-4 h-4 animate-spin" />
-                <span className="text-xs">Loading more...</span>
-              </div>
-            )}
-            {!loadingMoreQueue && queueSource?.hasMore && (
-              <p className="py-3 text-center text-xs text-slate-500">
-                Scroll down to load more from {queueSource.channelName}
-              </p>
-            )}
-          </div>
+        <div className="flex-1 min-h-0 flex flex-col px-2">
+          <QueueList coverArts={coverArts} active={showQueue} />
         </div>
       ) : (
         // Player View
@@ -633,7 +721,7 @@ export function PlayerOverlay() {
                   {metadata?.coverArt ? (
                     <img
                       src={metadata.coverArt}
-                      alt="Cover"
+                      alt={t('Cover')}
                       className="w-full h-full object-cover rounded-2xl"
                     />
                   ) : (
@@ -653,7 +741,7 @@ export function PlayerOverlay() {
                   {/* Tap hint */}
                   <div className="absolute bottom-3 left-0 right-0 text-center">
                     <span className="text-xs text-slate-400 bg-slate-800/80 px-3 py-1 rounded-full">
-                      {showEqualizer ? 'Tap for visualizer' : 'Tap for details'}
+                      {showEqualizer ? t('Tap for visualizer') : t('Tap for details')}
                     </span>
                   </div>
                 </div>
@@ -672,33 +760,33 @@ export function PlayerOverlay() {
                   ) : loadingMetadata ? (
                     <div className="flex flex-col items-center justify-center h-full p-5">
                       <Loader2 className="w-8 h-8 text-emerald-400 animate-spin" />
-                      <p className="text-slate-400 text-sm mt-2">Loading metadata...</p>
+                      <p className="text-slate-400 text-sm mt-2">{t('Loading metadata...')}</p>
                     </div>
                   ) : metadata ? (
                     <div data-no-dismiss className="space-y-3 text-sm p-5 overflow-y-auto h-full">
-                      <h3 className="text-emerald-400 font-semibold text-base mb-4">Track Info</h3>
+                      <h3 className="text-emerald-400 font-semibold text-base mb-4">{t('Track info')}</h3>
 
                       {/* Tags section */}
                       {(metadata.title || metadata.artist || metadata.album) && (
                         <div className="space-y-2 pb-3 border-b border-slate-600">
                           {metadata.title && (
-                            <MetadataRow label="Title" value={metadata.title} />
+                            <MetadataRow label={t('Title')} value={metadata.title} />
                           )}
                           {metadata.artist && (
-                            <MetadataRow label="Artist" value={metadata.artist} />
+                            <MetadataRow label={t('Artist')} value={metadata.artist} />
                           )}
                           {metadata.album && (
-                            <MetadataRow label="Album" value={metadata.album} />
+                            <MetadataRow label={t('Album')} value={metadata.album} />
                           )}
                           {metadata.year && (
-                            <MetadataRow label="Year" value={metadata.year.toString()} />
+                            <MetadataRow label={t('Year')} value={metadata.year.toString()} />
                           )}
                           {metadata.genre && metadata.genre.length > 0 && (
-                            <MetadataRow label="Genre" value={metadata.genre.join(', ')} />
+                            <MetadataRow label={t('Genre')} value={metadata.genre.join(', ')} />
                           )}
                           {metadata.track?.no && (
                             <MetadataRow
-                              label="Track"
+                              label={t('Track')}
                               value={metadata.track.of ? `${metadata.track.no}/${metadata.track.of}` : metadata.track.no.toString()}
                             />
                           )}
@@ -707,37 +795,37 @@ export function PlayerOverlay() {
 
                       {/* Technical section */}
                       <div className="space-y-2 pt-1">
-                        <h4 className="text-slate-400 text-xs uppercase">Technical</h4>
+                        <h4 className="text-slate-400 text-xs uppercase">{t('Technical')}</h4>
                         {metadata.format && (
-                          <MetadataRow label="Format" value={metadata.format.toUpperCase()} />
+                          <MetadataRow label={t('Format')} value={metadata.format.toUpperCase()} />
                         )}
                         {metadata.codec && (
-                          <MetadataRow label="Codec" value={metadata.codec} />
+                          <MetadataRow label={t('Codec')} value={metadata.codec} />
                         )}
                         {metadata.bitrate && (
-                          <MetadataRow label="Bitrate" value={`${metadata.bitrate} kbps`} />
+                          <MetadataRow label={t('Bitrate')} value={`${metadata.bitrate} kbps`} />
                         )}
                         {metadata.sampleRate && (
-                          <MetadataRow label="Sample Rate" value={`${metadata.sampleRate} Hz`} />
+                          <MetadataRow label={t('Sample rate')} value={`${metadata.sampleRate} Hz`} />
                         )}
                         {metadata.channels && (
-                          <MetadataRow label="Channels" value={metadata.channels === 2 ? 'Stereo' : metadata.channels === 1 ? 'Mono' : `${metadata.channels}`} />
+                          <MetadataRow label={t('Channels')} value={metadata.channels === 2 ? t('Stereo') : metadata.channels === 1 ? t('Mono') : `${metadata.channels}`} />
                         )}
                         {metadata.bitsPerSample && (
-                          <MetadataRow label="Bit Depth" value={`${metadata.bitsPerSample} bit`} />
+                          <MetadataRow label={t('Bit depth')} value={`${metadata.bitsPerSample} bit`} />
                         )}
                         {metadata.duration && (
-                          <MetadataRow label="Duration" value={formatDuration(metadata.duration)} />
+                          <MetadataRow label={t('Duration')} value={formatDuration(metadata.duration)} />
                         )}
                         {metadata.fileSize && (
-                          <MetadataRow label="Size" value={formatFileSize(metadata.fileSize)} />
+                          <MetadataRow label={t('Size')} value={formatFileSize(metadata.fileSize)} />
                         )}
                       </div>
                     </div>
                   ) : (
                     <div className="flex flex-col items-center justify-center h-full text-slate-400 p-5">
                       <Music className="w-12 h-12 mb-2 opacity-50" />
-                      <p className="text-sm">No metadata available</p>
+                      <p className="text-sm">{t('No metadata available')}</p>
                     </div>
                   )}
                 </div>
@@ -751,7 +839,7 @@ export function PlayerOverlay() {
               {currentTrack.title || currentTrack.fileName}
             </h1>
             <p className="text-slate-400 mt-1">
-              {currentTrack.artist || 'Unknown Artist'}
+              {currentTrack.artist || t('Unknown artist')}
             </p>
           </div>
 
@@ -893,6 +981,62 @@ export function PlayerOverlay() {
           onClose={() => setShowPlaylistPicker(false)}
         />
       )}
+    </div>
+  );
+}
+
+// Tags and technical data of the playing file (desktop details panel)
+function TrackDetails({ metadata, loading, fileName }: { metadata: AudioMetadata | null; loading: boolean; fileName: string }) {
+  if (loading && !metadata) {
+    return (
+      <div className="flex items-center gap-2 text-slate-400" role="status">
+        <Loader2 className="w-4 h-4 animate-spin" aria-hidden />
+        {t('Loading metadata...')}
+      </div>
+    );
+  }
+  if (!metadata) return <p className="text-slate-400">{t('No metadata available')}</p>;
+  const channels = metadata.channels === 2 ? t('Stereo') : metadata.channels === 1 ? t('Mono') : metadata.channels ? String(metadata.channels) : null;
+  const rows: [string, string | null | undefined][] = [
+    [t('Title'), metadata.title],
+    [t('Artist'), metadata.artist],
+    [t('Album'), metadata.album],
+    [t('Year'), metadata.year?.toString()],
+    [t('Genre'), metadata.genre?.join(', ')],
+    [t('Track'), metadata.track?.no ? (metadata.track.of ? `${metadata.track.no}/${metadata.track.of}` : String(metadata.track.no)) : null]
+  ];
+  const tech: [string, string | null | undefined][] = [
+    [t('Format'), metadata.format?.toUpperCase()],
+    [t('Codec'), metadata.codec],
+    [t('Bitrate'), metadata.bitrate ? `${metadata.bitrate} kbps` : null],
+    [t('Sample rate'), metadata.sampleRate ? `${metadata.sampleRate} Hz` : null],
+    [t('Channels'), channels],
+    [t('Bit depth'), metadata.bitsPerSample ? `${metadata.bitsPerSample} bit` : null],
+    [t('Duration'), metadata.duration ? formatDuration(metadata.duration) : null],
+    [t('Size'), metadata.fileSize ? formatFileSize(metadata.fileSize) : null],
+    [t('File'), fileName]
+  ];
+  const block = (title: string, list: [string, string | null | undefined][]) => {
+    const shown = list.filter(([, v]) => !!v) as [string, string][];
+    if (shown.length === 0) return null;
+    return (
+      <div>
+        <h3 className="mb-2 text-xs uppercase tracking-wide text-slate-500">{title}</h3>
+        <dl className="divide-y divide-white/5 rounded-xl bg-white/5">
+          {shown.map(([label, value]) => (
+            <div key={label} className="flex justify-between gap-4 px-4 py-2 text-sm">
+              <dt className="text-slate-400 shrink-0">{label}</dt>
+              <dd className="text-white text-right break-all">{value}</dd>
+            </div>
+          ))}
+        </dl>
+      </div>
+    );
+  };
+  return (
+    <div className="space-y-6">
+      {block(t('Tags'), rows)}
+      {block(t('Technical'), tech)}
     </div>
   );
 }

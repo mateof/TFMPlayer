@@ -1,4 +1,5 @@
 import { X, CheckSquare, Square, ListPlus, Download, ListEnd, Loader2 } from 'lucide-react';
+import { t } from '@/i18n';
 
 interface SelectionBarProps {
   count: number;
@@ -37,12 +38,12 @@ export function SelectionBar({
         <button
           onClick={onCancel}
           className="p-2 text-slate-300 hover:text-white transition-colors"
-          aria-label="Exit selection"
+          aria-label={t('Exit selection')}
         >
           <X className="w-5 h-5" />
         </button>
         <span className="text-sm text-white font-medium">
-          {count} selected
+          {t('{count} selected', { count })}
         </span>
 
         <div className="flex-1" />
@@ -53,7 +54,7 @@ export function SelectionBar({
           className="flex items-center gap-2 px-3 py-1.5 text-sm bg-slate-700 text-slate-200 rounded-lg disabled:opacity-50 transition-colors"
         >
           {allSelected ? <Square className="w-4 h-4" /> : <CheckSquare className="w-4 h-4" />}
-          {allSelected ? 'None' : 'All'}
+          {allSelected ? t('None') : t('All')}
         </button>
       </div>
 
@@ -65,7 +66,7 @@ export function SelectionBar({
           className="flex-1 flex items-center justify-center gap-2 px-3 py-2 bg-emerald-500 text-white rounded-lg text-sm font-medium disabled:opacity-50 transition-colors"
         >
           <ListPlus className="w-4 h-4" />
-          Playlist
+          {t('Playlist')}
         </button>
         <button
           onClick={onDownload}
@@ -73,7 +74,7 @@ export function SelectionBar({
           className="flex-1 flex items-center justify-center gap-2 px-3 py-2 bg-slate-700 text-slate-200 rounded-lg text-sm font-medium disabled:opacity-50 transition-colors"
         >
           <Download className="w-4 h-4" />
-          Download
+          {t('Download')}
         </button>
         <button
           onClick={onPlayNext}
@@ -81,7 +82,7 @@ export function SelectionBar({
           className="flex-1 flex items-center justify-center gap-2 px-3 py-2 bg-slate-700 text-slate-200 rounded-lg text-sm font-medium disabled:opacity-50 transition-colors"
         >
           <ListEnd className="w-4 h-4" />
-          Play next
+          {t('Play next')}
         </button>
       </div>
 
@@ -89,7 +90,7 @@ export function SelectionBar({
       {busy && (
         <div className="flex items-center gap-2 px-4 pb-2 text-xs text-emerald-300">
           <Loader2 className="w-4 h-4 animate-spin" />
-          <span>{busyLabel || 'Working...'}</span>
+          <span>{busyLabel || t('Working...')}</span>
         </div>
       )}
     </div>

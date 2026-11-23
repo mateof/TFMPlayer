@@ -1,3 +1,4 @@
+import { Suspense } from 'react';
 import { Outlet } from 'react-router-dom';
 import { TabBar } from './TabBar';
 import { Sidebar } from './Sidebar';
@@ -5,6 +6,8 @@ import { MiniPlayer } from '../player/MiniPlayer';
 import { DesktopPlayerBar } from '../player/DesktopPlayerBar';
 import { NowPlayingPanel } from '../player/NowPlayingPanel';
 import { ToastContainer } from '../common/Toast';
+import { ConfirmHost } from '../common/ConfirmDialog';
+import { LoadingScreen } from '../common/Spinner';
 import { PlayerOverlay } from '../player/PlayerOverlay';
 import { useUiStore } from '@/stores/uiStore';
 import { useMediaQuery, DESKTOP_QUERY, WIDE_QUERY } from '@/hooks/useMediaQuery';
@@ -26,11 +29,14 @@ export function AppShell() {
     return (
       <div className="flex flex-col min-h-screen bg-slate-900">
         <main className="flex-1 pb-32 overflow-y-auto">
-          <Outlet />
+          <Suspense fallback={<LoadingScreen />}>
+            <Outlet />
+          </Suspense>
         </main>
         <MiniPlayer />
         <TabBar />
         <ToastContainer />
+        <ConfirmHost />
         {isPlayerExpanded && <PlayerOverlay />}
       </div>
     );
@@ -43,12 +49,15 @@ export function AppShell() {
           <Sidebar />
         </div>
         <main className="flex-1 min-w-0 overflow-y-auto">
-          <Outlet />
+          <Suspense fallback={<LoadingScreen />}>
+            <Outlet />
+          </Suspense>
         </main>
         {isWide && isPanelOpen && <NowPlayingPanel />}
       </div>
       <DesktopPlayerBar />
       <ToastContainer />
+      <ConfirmHost />
       {isPlayerExpanded && <PlayerOverlay />}
     </div>
   );

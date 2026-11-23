@@ -5,7 +5,9 @@ import { useSettingsStore } from '@/stores/settingsStore';
 import { useUiStore } from '@/stores/uiStore';
 import type { Track } from '@/types/models';
 import { create } from 'zustand';
-import * as mm from 'music-metadata';
+import { loadMusicMetadata } from '@/utils/musicMetadata';
+import { log } from '@/utils/logger';
+import { t } from '@/i18n';
 
 // Download store for reactive state
 interface DownloadState {
@@ -62,7 +64,7 @@ class DownloadManager {
     try {
       const buffer = await blob.arrayBuffer();
       const uint8Array = new Uint8Array(buffer);
-      const metadata = await mm.parseBuffer(uint8Array, {
+      const metadata = await (await loadMusicMetadata()).parseBuffer(uint8Array, {
         mimeType: blob.type || 'audio/mpeg',
         size: blob.size
       });
@@ -114,12 +116,12 @@ class DownloadManager {
     this.transcodeWarningShown = true;
 
     const reason = status === 501
-      ? 'the server has no FFmpeg'
+      ? t('the server has no FFmpeg')
       : status === 404
-        ? 'the server does not support it for this source'
-        : `the server answered ${status}`;
+        ? t('the server does not support it for this source')
+        : t('the server answered {status}', { status });
     useUiStore.getState().addToast(
-      `Downloading in original format: transcoding failed because ${reason}`,
+      t('Downloading in original format: transcoding failed because {reason}', { reason }),
       'warning'
     );
   }
@@ -148,7 +150,7 @@ class DownloadManager {
     if (!force) {
       const isCached = await cacheService.isTrackCached(track.fileId);
       if (isCached) {
-        console.log('Track already cached:', track.fileName);
+        log.debug('Track already cached:', track.fileName);
         return;
       }
     }
@@ -168,7 +170,7 @@ class DownloadManager {
         filePath: track.filePath,
         errorMessage: undefined
       });
-      console.log('Track reset in queue:', track.fileName);
+      log.debug('Track reset in queue:', track.fileName);
 
       // Start processing if not already
       this.processQueue();
@@ -215,7 +217,7 @@ class DownloadManager {
     await db.transaction('rw', db.downloadQueue, async () => {
       const existing = await db.downloadQueue
         .where('trackId')
-        .anyOf(wanted.map((t) => t.fileId))
+        .anyOf(wanted.map((track) => track.fileId))
         .toArray();
       const existingByTrack = new Map(existing.map((item) => [item.trackId, item]));
 
@@ -252,7 +254,7 @@ class DownloadManager {
       if (additions.length > 0) await db.downloadQueue.bulkAdd(additions as DownloadQueueEntity[]);
     });
 
-    console.log(`Queued ${wanted.length} of ${tracks.length} tracks for download`);
+    log.debug(`Queued ${wanted.length} of ${tracks.length} tracks for download`);
     if (!this.isProcessing) {
       this.processQueue();
     }
@@ -261,13 +263,13 @@ class DownloadManager {
   // Process the download queue
   async processQueue(): Promise<void> {
     if (this.isProcessing) {
-      console.log('Download queue already processing');
+      log.debug('Download queue already processing');
       return;
     }
 
     this.isProcessing = true;
     useDownloadStore.getState().setProcessing(true);
-    console.log('Starting download queue processing...');
+    log.debug('Starting download queue processing...');
 
     try {
       let processedCount = 0;
@@ -279,11 +281,11 @@ class DownloadManager {
           .first();
 
         if (!item) {
-          console.log(`Queue processing complete. Processed ${processedCount} items.`);
+          log.debug(`Queue processing complete. Processed ${processedCount} items.`);
           break;
         }
 
-        console.log(`Processing download: ${item.fileName}`);
+        log.debug(`Processing download: ${item.fileName}`);
         await this.downloadItem(item);
         processedCount++;
       }
@@ -297,7 +299,7 @@ class DownloadManager {
 
   // Force restart queue processing (useful if stuck)
   async restartQueue(): Promise<void> {
-    console.log('Force restarting download queue...');
+    log.debug('Force restarting download queue...');
     this.isProcessing = false;
 
     // Reset any stuck 'downloading' items back to pending
@@ -334,7 +336,7 @@ class DownloadManager {
       const end = Math.min(downloaded + CHUNK_SIZE - 1, totalSize - 1);
       const rangeHeader = `bytes=${downloaded}-${end}`;
 
-      console.log(`Downloading chunk: ${rangeHeader}`);
+      log.debug(`Downloading chunk: ${rangeHeader}`);
 
       const response = await fetch(downloadUrl, {
         signal,
@@ -357,7 +359,7 @@ class DownloadManager {
       await db.downloadQueue.update(item.id!, { progress });
       useDownloadStore.getState().setProgress(item.trackId, progress);
 
-      console.log(`Downloaded ${downloaded} / ${totalSize} bytes (${progress}%)`);
+      log.debug(`Downloaded ${downloaded} / ${totalSize} bytes (${progress}%)`);
     }
 
     return new Blob(chunks, { type: blobType });
@@ -447,19 +449,19 @@ class DownloadManager {
         const match = contentRange.match(/\/(\d+)$/);
         if (match) {
           totalSize = parseInt(match[1]);
-          console.log('Partial response detected for download. Total:', totalSize, 'Chunk:', contentLength);
+          log.debug('Partial response detected for download. Total:', totalSize, 'Chunk:', contentLength);
         }
       }
 
       // If server returns partial content, fetch in chunks
       if (contentRange && contentLength && parseInt(contentLength) < totalSize) {
-        console.log('Server returned partial content. Downloading in chunks...');
+        log.debug('Server returned partial content. Downloading in chunks...');
         const blob = await this.downloadInChunks(
           item, downloadUrl, apiKey, totalSize, abortController.signal, blobType
         );
 
         // Extract metadata from the downloaded file
-        console.log('Extracting metadata for:', item.fileName);
+        log.debug('Extracting metadata for:', item.fileName);
         const metadata = await this.extractMetadata(blob);
 
         await db.cachedTracks.put({
@@ -482,7 +484,7 @@ class DownloadManager {
         });
 
         await db.downloadQueue.delete(item.id!);
-        console.log('Download completed (chunked):', item.fileName, 'Size:', blob.size, 'Metadata:', metadata.title || 'none');
+        log.debug('Download completed (chunked):', item.fileName, 'Size:', blob.size, 'Metadata:', metadata.title || 'none');
         useDownloadStore.getState().markCompleted(item.trackId);
         return;
       }
@@ -512,7 +514,7 @@ class DownloadManager {
       // Create blob and save to cache
       const blob = new Blob(chunks, { type: blobType });
 
-      console.log('Download stats:', {
+      log.debug('Download stats:', {
         fileName: item.fileName,
         expectedSize: totalSize,
         actualSize: blob.size,
@@ -526,7 +528,7 @@ class DownloadManager {
       }
 
       // Extract metadata from the downloaded file
-      console.log('Extracting metadata for:', item.fileName);
+      log.debug('Extracting metadata for:', item.fileName);
       const metadata = await this.extractMetadata(blob);
 
       await db.cachedTracks.put({
@@ -548,7 +550,7 @@ class DownloadManager {
 
       // Remove from queue (track is now in cache)
       await db.downloadQueue.delete(item.id!);
-      console.log('Download completed:', item.fileName, 'Size:', blob.size, 'Metadata:', metadata.title || 'none');
+      log.debug('Download completed:', item.fileName, 'Size:', blob.size, 'Metadata:', metadata.title || 'none');
 
       useDownloadStore.getState().markCompleted(item.trackId);
     } catch (error) {
@@ -558,7 +560,7 @@ class DownloadManager {
         console.error('Download failed:', error);
         await db.downloadQueue.update(item.id!, {
           status: 'failed',
-          errorMessage: error instanceof Error ? error.message : 'Unknown error'
+          errorMessage: error instanceof Error ? error.message : t('Unknown error')
         });
       }
       // For failed/cancelled, just remove from active (don't mark as completed)
@@ -663,11 +665,11 @@ class DownloadManager {
       .toArray();
 
     if (tracksToAnalyze.length === 0) {
-      console.log('All tracks already have metadata extracted');
+      log.debug('All tracks already have metadata extracted');
       return 0;
     }
 
-    console.log(`Analyzing ${tracksToAnalyze.length} tracks for metadata...`);
+    log.debug(`Analyzing ${tracksToAnalyze.length} tracks for metadata...`);
     let analyzedCount = 0;
 
     for (const track of tracksToAnalyze) {
@@ -692,7 +694,7 @@ class DownloadManager {
         });
 
         analyzedCount++;
-        console.log(`Analyzed: ${track.fileName} -> ${metadata.title || 'no title'}`);
+        log.debug(`Analyzed: ${track.fileName} -> ${metadata.title || 'no title'}`);
 
         if (onProgress) {
           onProgress(analyzedCount, tracksToAnalyze.length);
@@ -704,7 +706,7 @@ class DownloadManager {
       }
     }
 
-    console.log(`Metadata analysis complete. Analyzed ${analyzedCount} tracks.`);
+    log.debug(`Metadata analysis complete. Analyzed ${analyzedCount} tracks.`);
     return analyzedCount;
   }
 

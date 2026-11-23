@@ -1,4 +1,5 @@
 import { Loader2 } from 'lucide-react';
+import { t } from '@/i18n';
 
 interface SpinnerProps {
   size?: 'sm' | 'md' | 'lg';
@@ -23,7 +24,7 @@ interface LoadingScreenProps {
   message?: string;
 }
 
-export function LoadingScreen({ message = 'Loading...' }: LoadingScreenProps) {
+export function LoadingScreen({ message = t('Loading...') }: LoadingScreenProps) {
   return (
     <div className="flex flex-col items-center justify-center min-h-[200px] gap-4">
       <Spinner size="lg" />

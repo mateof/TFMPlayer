@@ -1,3 +1,5 @@
+import { getLanguage, t } from '@/i18n';
+
 /**
  * Format duration in seconds to mm:ss or h:mm:ss
  */
@@ -32,7 +34,7 @@ export function formatFileSize(bytes: number): string {
  */
 export function formatDate(date: string | Date): string {
   const d = typeof date === 'string' ? new Date(date) : date;
-  return d.toLocaleDateString(undefined, {
+  return d.toLocaleDateString(getLanguage() === 'es' ? 'es-ES' : 'en-GB', {
     year: 'numeric',
     month: 'short',
     day: 'numeric'
@@ -54,13 +56,13 @@ export function formatRelativeTime(date: string | Date): string {
   if (diffDays > 7) {
     return formatDate(d);
   } else if (diffDays > 0) {
-    return `${diffDays} day${diffDays > 1 ? 's' : ''} ago`;
+    return diffDays > 1 ? t('{count} days ago', { count: diffDays }) : t('1 day ago');
   } else if (diffHours > 0) {
-    return `${diffHours} hour${diffHours > 1 ? 's' : ''} ago`;
+    return diffHours > 1 ? t('{count} hours ago', { count: diffHours }) : t('1 hour ago');
   } else if (diffMins > 0) {
-    return `${diffMins} minute${diffMins > 1 ? 's' : ''} ago`;
+    return diffMins > 1 ? t('{count} minutes ago', { count: diffMins }) : t('1 minute ago');
   } else {
-    return 'Just now';
+    return t('Just now');
   }
 }
 
@@ -76,7 +78,7 @@ export function truncate(text: string, maxLength: number): string {
  * Calculate bitrate from file size and duration
  */
 export function calculateBitrate(fileSize: number, durationSeconds: number): string {
-  if (!fileSize || !durationSeconds) return 'Unknown';
+  if (!fileSize || !durationSeconds) return t('Unknown');
   const bitrate = (fileSize * 8) / durationSeconds / 1000;
   return `${Math.round(bitrate)} kbps`;
 }

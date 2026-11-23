@@ -5,6 +5,7 @@ import { getPreloadedRanges } from '@/utils/preload';
 import { useUiStore } from '@/stores/uiStore';
 import { useState, useRef } from 'react';
 import { useCoverArt } from '@/hooks/useCoverArt';
+import { t } from '@/i18n';
 
 export function MiniPlayer() {
   const setPlayerExpanded = useUiStore((s) => s.setPlayerExpanded);
@@ -129,7 +130,7 @@ export function MiniPlayer() {
           value={position}
           onChange={handleSeek}
           onClick={(e) => e.stopPropagation()}
-          aria-label="Seek"
+          aria-label={t('Seek')}
           className="absolute left-0 right-0 -top-2 -bottom-2 h-auto w-full opacity-0 cursor-pointer touch-manipulation"
         />
       </div>
@@ -145,7 +146,7 @@ export function MiniPlayer() {
         {/* Album art / icon */}
         <div className="w-12 h-12 bg-slate-700 rounded-lg flex items-center justify-center shrink-0 overflow-hidden">
           {coverArt ? (
-            <img src={coverArt} alt="Cover" className="w-full h-full object-cover" />
+            <img src={coverArt} alt={t('Cover')} className="w-full h-full object-cover" />
           ) : (
             <Music className="w-6 h-6 text-slate-400" />
           )}
@@ -171,7 +172,7 @@ export function MiniPlayer() {
           <button
             onClick={handlePlayPause}
             disabled={isLoading}
-            aria-label={isPlaying ? 'Pause' : 'Play'}
+            aria-label={isPlaying ? t('Pause') : t('Play')}
             className="p-2 text-white hover:text-emerald-400 transition-colors disabled:opacity-50"
           >
             {isLoading ? (
@@ -184,7 +185,7 @@ export function MiniPlayer() {
           </button>
           <button
             onClick={handleNext}
-            aria-label="Next track"
+            aria-label={t('Next track')}
             className="p-2 text-slate-400 hover:text-white transition-colors"
           >
             <SkipForward className="w-5 h-5" />

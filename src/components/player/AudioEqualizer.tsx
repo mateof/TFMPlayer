@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { audioPlayer } from '@/services/audio/AudioPlayerService';
+import { t } from '@/i18n';
 
 interface AudioEqualizerProps {
   isPlaying: boolean;
@@ -8,10 +9,10 @@ interface AudioEqualizerProps {
 type VisualizerMode = 'bars' | 'mirror' | 'wave' | 'circle';
 
 const MODES: { key: VisualizerMode; label: string }[] = [
-  { key: 'bars', label: 'Bars' },
-  { key: 'mirror', label: 'Mirror' },
-  { key: 'wave', label: 'Wave' },
-  { key: 'circle', label: 'Circle' }
+  { key: 'bars', label: t('Bars') },
+  { key: 'mirror', label: t('Mirror') },
+  { key: 'wave', label: t('Wave') },
+  { key: 'circle', label: t('Circle') }
 ];
 
 const MODE_STORAGE_KEY = 'tfm-visualizer-mode';
@@ -125,7 +126,7 @@ export function AudioEqualizer({ isPlaying }: AudioEqualizerProps) {
 
     // Synthetic bands for the fallback animation (no analyser available)
     const computeFallbackBands = (): number[] => {
-      const t = timeRef.current;
+      const time = timeRef.current;
       const bands: number[] = [];
       for (let i = 0; i < BAR_COUNT; i++) {
         if (!isPlaying) {
@@ -135,8 +136,8 @@ export function AudioEqualizer({ isPlaying }: AudioEqualizerProps) {
         const n = i / BAR_COUNT;
         const envelope = 0.55 - n * 0.3; // more energy in the lows
         const wobble =
-          Math.sin(t * 2.1 + i * 0.9) * 0.18 +
-          Math.sin(t * 3.7 + i * 0.35) * 0.12 +
+          Math.sin(time * 2.1 + i * 0.9) * 0.18 +
+          Math.sin(time * 3.7 + i * 0.35) * 0.12 +
           Math.random() * 0.12;
         bands.push(Math.max(0.03, Math.min(1, envelope + wobble)));
       }
@@ -262,13 +263,13 @@ export function AudioEqualizer({ isPlaying }: AudioEqualizerProps) {
         }
       } else {
         // Synthetic idle/fallback wave
-        const t = timeRef.current;
+        const time = timeRef.current;
         const amplitude = isPlaying ? height * 0.22 : height * 0.03;
         for (let x = 0; x < width; x++) {
           const n = x / width;
           const y = centerY +
-            Math.sin(n * Math.PI * 6 + t * 3) * amplitude * 0.7 +
-            Math.sin(n * Math.PI * 14 + t * 5.3) * amplitude * 0.3;
+            Math.sin(n * Math.PI * 6 + time * 3) * amplitude * 0.7 +
+            Math.sin(n * Math.PI * 14 + time * 5.3) * amplitude * 0.3;
           if (x === 0) ctx.moveTo(x, y);
           else ctx.lineTo(x, y);
         }

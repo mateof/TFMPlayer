@@ -4,6 +4,7 @@ import { cacheService } from '@/services/cache/CacheService';
 import { isPlaylistOffline } from '@/db/database';
 import { useUiStore } from '@/stores/uiStore';
 import { queryClient, queryKeys } from '@/services/query/queryClient';
+import { t } from '@/i18n';
 import type { Track } from '@/types/models';
 
 export interface AddToPlaylistResult {
@@ -26,25 +27,25 @@ export async function addTracksToPlaylist(
   const result = await playlistsApi.addTracks(playlistId, tracks, onProgress);
 
   const parts: string[] = [];
-  if (result.added > 0) parts.push(`${result.added} track${result.added === 1 ? '' : 's'} added`);
-  if (result.duplicates > 0) parts.push(`${result.duplicates} already there`);
-  if (result.failed > 0) parts.push(`${result.failed} failed`);
+  if (result.added > 0) parts.push(result.added === 1 ? t('1 track added') : t('{count} tracks added', { count: result.added }));
+  if (result.duplicates > 0) parts.push(t('{count} already there', { count: result.duplicates }));
+  if (result.failed > 0) parts.push(t('{count} failed', { count: result.failed }));
 
   // Offline playlists pull in the audio too
   if (result.added > 0 && (await isPlaylistOffline(playlistId))) {
-    const cached = await cacheService.getCachedTrackIds(tracks.map((t) => t.fileId));
-    const missing = tracks.filter((t) => !cached.has(t.fileId));
+    const cached = await cacheService.getCachedTrackIds(tracks.map((tr) => tr.fileId));
+    const missing = tracks.filter((tr) => !cached.has(tr.fileId));
     if (missing.length > 0) {
       await downloadManager.addMultipleToQueue(missing);
-      parts.push(`${missing.length} queued for download`);
+      parts.push(t('{count} queued for download', { count: missing.length }));
     }
   }
 
   // Track counts in the sidebar and lists are now stale
   if (result.added > 0) queryClient.invalidateQueries({ queryKey: queryKeys.playlists.all });
 
-  const summary = parts.length > 0 ? parts.join(', ') : 'Nothing to add';
+  const summary = parts.length > 0 ? parts.join(', ') : t('Nothing to add');
   const tone = result.added > 0 ? 'success' : result.failed > 0 ? 'error' : 'info';
-  useUiStore.getState().addToast(`${playlistName}: ${summary}`, tone);
+  useUiStore.getState().addToast(t('{name}: {summary}', { name: playlistName, summary }), tone);
   return result;
 }

@@ -3,6 +3,7 @@ import { playlistsApi } from '@/services/api/playlists.api';
 import { downloadManager } from '@/services/download/DownloadManager';
 import { cacheService } from '@/services/cache/CacheService';
 import type { Track } from '@/types/models';
+import { log } from '@/utils/logger';
 
 const SYNC_INTERVAL = 2 * 60 * 1000; // 2 minutes
 
@@ -15,7 +16,7 @@ class PlaylistSyncService {
   start(): void {
     if (this.intervalId) return;
 
-    console.log('[PlaylistSync] Starting sync service...');
+    log.debug('[PlaylistSync] Starting sync service...');
 
     // Run initial sync after a short delay
     setTimeout(() => this.syncOfflinePlaylists(), 5000);
@@ -31,7 +32,7 @@ class PlaylistSyncService {
     if (this.intervalId) {
       window.clearInterval(this.intervalId);
       this.intervalId = null;
-      console.log('[PlaylistSync] Sync service stopped');
+      log.debug('[PlaylistSync] Sync service stopped');
     }
   }
 
@@ -43,7 +44,7 @@ class PlaylistSyncService {
   // Sync all offline playlists with autoSync enabled
   private async syncOfflinePlaylists(): Promise<void> {
     if (this.isSyncing) {
-      console.log('[PlaylistSync] Sync already in progress, skipping...');
+      log.debug('[PlaylistSync] Sync already in progress, skipping...');
       return;
     }
 
@@ -64,7 +65,7 @@ class PlaylistSyncService {
         return;
       }
 
-      console.log(`[PlaylistSync] Syncing ${playlistsToSync.length} offline playlists...`);
+      log.debug(`[PlaylistSync] Syncing ${playlistsToSync.length} offline playlists...`);
 
       for (const offlinePlaylist of playlistsToSync) {
         try {
@@ -74,7 +75,7 @@ class PlaylistSyncService {
         }
       }
 
-      console.log('[PlaylistSync] Sync complete');
+      log.debug('[PlaylistSync] Sync complete');
     } catch (error) {
       console.error('[PlaylistSync] Error during sync:', error);
     } finally {
@@ -98,7 +99,7 @@ class PlaylistSyncService {
       return;
     }
 
-    console.log(`[PlaylistSync] Found ${newTracks.length} new tracks in playlist "${serverPlaylist.name}"`);
+    log.debug(`[PlaylistSync] Found ${newTracks.length} new tracks in playlist "${serverPlaylist.name}"`);
 
     // Update local offline playlist data
     await saveOfflinePlaylist(
@@ -128,7 +129,7 @@ class PlaylistSyncService {
     }
 
     if (totalMissing > 0) {
-      console.log(`[PlaylistSync] Queued ${totalMissing} missing tracks for download`);
+      log.debug(`[PlaylistSync] Queued ${totalMissing} missing tracks for download`);
     }
 
     return totalMissing;

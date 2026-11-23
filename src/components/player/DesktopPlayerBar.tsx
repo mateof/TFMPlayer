@@ -6,8 +6,10 @@ import {
 import { useAudioPlayer } from '@/hooks/useAudioPlayer';
 import { useUiStore } from '@/stores/uiStore';
 import { useCoverArt } from '@/hooks/useCoverArt';
+import { SleepTimerButton } from './SleepTimerButton';
 import { formatDuration } from '@/utils/format';
 import { getPreloadedRanges } from '@/utils/preload';
+import { t } from '@/i18n';
 
 /**
  * Full-width player bar for desktop: track info, transport controls with a
@@ -46,7 +48,7 @@ export function DesktopPlayerBar() {
       <button
         onClick={() => setPlayerExpanded(true)}
         className="flex items-center gap-3 min-w-0 text-left group"
-        title="Open full player"
+        title={t('Open full player')}
       >
         <div className="w-14 h-14 bg-slate-800 rounded-lg flex items-center justify-center shrink-0 overflow-hidden">
           {coverArt ? (
@@ -71,18 +73,18 @@ export function DesktopPlayerBar() {
           <button
             onClick={toggleShuffle}
             className={`${iconButton} ${shuffle ? 'text-emerald-400' : 'text-slate-400 hover:text-white'}`}
-            title="Shuffle"
+            title={t('Shuffle')}
           >
             <Shuffle className="w-4 h-4" />
           </button>
-          <button onClick={previous} className={`${iconButton} text-slate-300 hover:text-white`} title="Previous (Shift+←)">
+          <button onClick={previous} className={`${iconButton} text-slate-300 hover:text-white`} title={t('Previous (Shift+←)')}>
             <SkipBack className="w-5 h-5" fill="currentColor" />
           </button>
           <button
             onClick={togglePlayPause}
             disabled={isLoading}
             className="w-10 h-10 rounded-full bg-white text-slate-900 flex items-center justify-center hover:scale-105 transition-transform disabled:opacity-60"
-            title="Play/Pause (Space)"
+            title={t('Play/Pause (Space)')}
           >
             {isLoading ? (
               <div className="w-5 h-5 border-2 border-slate-900 border-t-transparent rounded-full animate-spin" />
@@ -92,13 +94,13 @@ export function DesktopPlayerBar() {
               <Play className="w-5 h-5 ml-0.5" fill="currentColor" />
             )}
           </button>
-          <button onClick={next} className={`${iconButton} text-slate-300 hover:text-white`} title="Next (Shift+→)">
+          <button onClick={next} className={`${iconButton} text-slate-300 hover:text-white`} title={t('Next (Shift+→)')}>
             <SkipForward className="w-5 h-5" fill="currentColor" />
           </button>
           <button
             onClick={cycleRepeatMode}
             className={`${iconButton} ${repeatMode !== 'none' ? 'text-emerald-400' : 'text-slate-400 hover:text-white'}`}
-            title={`Repeat: ${repeatMode}`}
+            title={t('Repeat: {mode}', { mode: repeatMode === 'one' ? t('This track') : repeatMode === 'all' ? t('All tracks') : t('Off') })}
           >
             {repeatMode === 'one' ? <Repeat1 className="w-4 h-4" /> : <Repeat className="w-4 h-4" />}
           </button>
@@ -128,7 +130,7 @@ export function DesktopPlayerBar() {
               step="any"
               value={position}
               onChange={(e) => seek(parseFloat(e.target.value))}
-              aria-label="Seek"
+              aria-label={t('Seek')}
               className="absolute left-0 right-0 -top-2 -bottom-2 h-auto w-full opacity-0 cursor-pointer"
             />
           </div>
@@ -138,7 +140,8 @@ export function DesktopPlayerBar() {
 
       {/* Volume + panels */}
       <div className="flex items-center justify-end gap-2">
-        <button onClick={toggleMute} className={`${iconButton} text-slate-400 hover:text-white`} title="Mute">
+        <SleepTimerButton placement="up" />
+        <button onClick={toggleMute} className={`${iconButton} text-slate-400 hover:text-white`} title={t('Mute')}>
           {volume === 0 ? <VolumeX className="w-5 h-5" /> : <Volume2 className="w-5 h-5" />}
         </button>
         <input
@@ -148,20 +151,20 @@ export function DesktopPlayerBar() {
           step={0.01}
           value={volume}
           onChange={(e) => setVolume(parseFloat(e.target.value))}
-          aria-label="Volume"
+          aria-label={t('Volume')}
           className="w-28"
         />
         <button
           onClick={togglePanel}
           className={`hidden xl:block ${iconButton} ${isPanelOpen ? 'text-emerald-400' : 'text-slate-400 hover:text-white'}`}
-          title="Now playing panel"
+          title={t('Now playing panel')}
         >
           <PanelRight className="w-5 h-5" />
         </button>
         <button
           onClick={() => setPlayerExpanded(true)}
           className={`${iconButton} text-slate-400 hover:text-white`}
-          title="Full player (equalizer, queue)"
+          title={t('Full player (equalizer, queue)')}
         >
           <Maximize2 className="w-5 h-5" />
         </button>

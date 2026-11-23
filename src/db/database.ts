@@ -1,4 +1,5 @@
 import Dexie, { type Table } from 'dexie';
+import { log } from '@/utils/logger';
 
 // Database entity types
 export interface ServerConfigEntity {
@@ -69,6 +70,17 @@ export interface PlayHistoryEntity {
   channelId: string;
   fileName: string;
   playedAt: Date;
+  // Whole track, so history can be replayed without the server (v5)
+  trackJson?: string;
+}
+
+// Rule-based playlist evaluated on the device (v5)
+export interface SmartPlaylistEntity {
+  id: string;
+  name: string;
+  rulesJson: string;
+  createdAt: Date;
+  updatedAt: Date;
 }
 
 // Generic cache of API responses (playlist details, channel lists...) so every
@@ -98,6 +110,7 @@ class TFMAudioDatabase extends Dexie {
   playHistory!: Table<PlayHistoryEntity>;
   cachedPlaylists!: Table<CachedPlaylistEntity>;
   apiCache!: Table<ApiCacheEntity>;
+  smartPlaylists!: Table<SmartPlaylistEntity>;
 
   constructor() {
     super('TFMAudioDB');
@@ -139,6 +152,18 @@ class TFMAudioDatabase extends Dexie {
       playHistory: '++id, trackId, playedAt',
       cachedPlaylists: 'id, cachedAt',
       apiCache: 'key'
+    });
+
+    // Version 5: smart playlists (play history gains trackJson, no index change)
+    this.version(5).stores({
+      serverConfig: '++id',
+      cachedTracks: 'id, channelId, cachedAt, lastPlayedAt',
+      offlinePlaylists: 'id, autoSync',
+      downloadQueue: '++id, trackId, status, addedAt',
+      playHistory: '++id, trackId, playedAt',
+      cachedPlaylists: 'id, cachedAt',
+      apiCache: 'key',
+      smartPlaylists: 'id, updatedAt'
     });
   }
 }
@@ -248,7 +273,7 @@ export async function requestPersistentStorage(): Promise<boolean> {
   try {
     if (await navigator.storage.persisted()) return true;
     const granted = await navigator.storage.persist();
-    console.log(`Persistent storage ${granted ? 'granted' : 'denied'}`);
+    log.debug(`Persistent storage ${granted ? 'granted' : 'denied'}`);
     return granted;
   } catch {
     return false;

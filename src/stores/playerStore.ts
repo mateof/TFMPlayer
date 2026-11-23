@@ -38,6 +38,9 @@ interface PlayerState {
   bufferedRanges: BufferedRange[]; // Seconds buffered by the audio element
   cachedPercent: number; // Background auto-cache download progress (0-100)
   queueSource: QueueSource | null; // Paginated origin of the queue (null = static queue)
+  savedPosition: number; // Last known position, restored with the queue on startup
+  sleepTimerEndsAt: number | null; // Epoch ms when the sleep timer pauses playback
+  sleepAtEndOfTrack: boolean; // Sleep timer set to "end of this track"
 
   // Actions
   setCurrentTrack: (track: Track | null) => void;
@@ -49,6 +52,8 @@ interface PlayerState {
   setBufferedRanges: (ranges: BufferedRange[]) => void;
   setCachedPercent: (percent: number) => void;
   setQueueSource: (source: QueueSource | null) => void;
+  setSavedPosition: (position: number) => void;
+  setSleepTimer: (endsAt: number | null, atEndOfTrack: boolean) => void;
   setVolume: (volume: number) => void;
   toggleShuffle: () => void;
   cycleRepeatMode: () => void;
@@ -64,6 +69,14 @@ interface PlayerState {
   moveInQueue: (fromIndex: number, toIndex: number) => void;
   hasNext: () => boolean;
   hasPrevious: () => boolean;
+}
+
+const PERSISTED_QUEUE_MAX = 1500;
+
+function windowQueue(queue: Track[], currentIndex: number): { queue: Track[]; currentIndex: number } {
+  if (queue.length <= PERSISTED_QUEUE_MAX) return { queue, currentIndex };
+  const start = Math.max(0, Math.min(currentIndex - 100, queue.length - PERSISTED_QUEUE_MAX));
+  return { queue: queue.slice(start, start + PERSISTED_QUEUE_MAX), currentIndex: currentIndex - start };
 }
 
 export const usePlayerStore = create<PlayerState>()(
@@ -83,6 +96,9 @@ export const usePlayerStore = create<PlayerState>()(
       bufferedRanges: [],
       cachedPercent: 0,
       queueSource: null,
+      savedPosition: 0,
+      sleepTimerEndsAt: null,
+      sleepAtEndOfTrack: false,
 
       setCurrentTrack: (track) => set({ currentTrack: track }),
       // Replacing the queue invalidates any previous paginated source; the new
@@ -94,6 +110,8 @@ export const usePlayerStore = create<PlayerState>()(
       setDuration: (duration) => set({ duration }),
       setBufferedRanges: (ranges) => set({ bufferedRanges: ranges }),
       setCachedPercent: (percent) => set({ cachedPercent: percent }),
+      setSavedPosition: (savedPosition) => set({ savedPosition }),
+      setSleepTimer: (sleepTimerEndsAt, sleepAtEndOfTrack) => set({ sleepTimerEndsAt, sleepAtEndOfTrack }),
       setQueueSource: (source) => set({ queueSource: source }),
       setVolume: (volume) => set({ volume }),
       toggleShuffle: () => set((s) => ({ shuffle: !s.shuffle })),
@@ -155,12 +173,22 @@ export const usePlayerStore = create<PlayerState>()(
     {
       name: 'tfm-player-storage',
       storage: createJSONStorage(() => localStorage),
-      partialize: (state) => ({
-        volume: state.volume,
-        shuffle: state.shuffle,
-        repeatMode: state.repeatMode,
-        showEqualizer: state.showEqualizer
-      })
+      // The queue survives closing the app. Very long queues keep a window
+      // around the current track so localStorage stays small.
+      partialize: (state) => {
+        const { queue, currentIndex } = windowQueue(state.queue, state.currentIndex);
+        return {
+          volume: state.volume,
+          shuffle: state.shuffle,
+          repeatMode: state.repeatMode,
+          showEqualizer: state.showEqualizer,
+          queue,
+          currentIndex,
+          currentTrack: state.currentTrack,
+          savedPosition: state.savedPosition,
+          queueSource: state.queueSource
+        };
+      }
     }
   )
 );

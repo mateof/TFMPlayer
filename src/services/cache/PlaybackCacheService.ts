@@ -1,10 +1,11 @@
-import * as mm from 'music-metadata';
+import { loadMusicMetadata } from '@/utils/musicMetadata';
 import { db } from '@/db/database';
 import { apiClient, buildLocalStreamUrlSync } from '@/services/api/client';
 import { cacheService } from '@/services/cache/CacheService';
 import { useDownloadStore } from '@/services/download/DownloadManager';
 import { useSettingsStore } from '@/stores/settingsStore';
 import type { Track } from '@/types/models';
+import { log } from '@/utils/logger';
 
 const CHUNK_SIZE = 2 * 1024 * 1024; // 2MB chunks (matching server's chunk size)
 
@@ -82,7 +83,7 @@ class PlaybackCacheService {
         autoCached: true
       });
 
-      console.log('Auto-cached track:', track.fileName, 'Size:', blob.size);
+      log.debug('Auto-cached track:', track.fileName, 'Size:', blob.size);
 
       const { maxCacheSizeMB } = useSettingsStore.getState();
       await cacheService.enforceCacheLimit(maxCacheSizeMB * 1024 * 1024, track.fileId);
@@ -172,7 +173,7 @@ class PlaybackCacheService {
   }> {
     try {
       const buffer = await blob.arrayBuffer();
-      const metadata = await mm.parseBuffer(new Uint8Array(buffer), {
+      const metadata = await (await loadMusicMetadata()).parseBuffer(new Uint8Array(buffer), {
         mimeType: blob.type || 'audio/mpeg',
         size: blob.size
       });

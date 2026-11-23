@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { Download, Music, Trash2, HardDrive, X, RotateCcw, Play, Loader2, Search } from 'lucide-react';
 import { Header } from '@/components/layout/Header';
+import { Link } from 'react-router-dom';
 import { Button } from '@/components/common/Button';
 import { LoadingScreen } from '@/components/common/Spinner';
 import { TrackContextMenu } from '@/components/common/TrackContextMenu';
@@ -12,6 +13,9 @@ import { useUiStore } from '@/stores/uiStore';
 import { useSettingsStore } from '@/stores/settingsStore';
 import type { CachedTrackEntity, DownloadQueueEntity } from '@/db/database';
 import type { Track } from '@/types/models';
+import { log } from '@/utils/logger';
+import { confirmDialog } from '@/components/common/confirm';
+import { t } from '@/i18n';
 
 type Tab = 'queue' | 'cached';
 
@@ -40,37 +44,38 @@ export function DownloadsPage() {
   const mismatchedTracks = downloadFormat === 'original'
     ? []
     : cachedTracks.filter(
-        t => t.audioFormat && t.audioFormat.toLowerCase() !== downloadFormat
+        ct => ct.audioFormat && ct.audioFormat.toLowerCase() !== downloadFormat
       );
 
   const handleConvertMismatched = async () => {
     if (mismatchedTracks.length === 0) return;
-    if (!confirm(
-      `Re-download ${mismatchedTracks.length} track(s) in ${downloadFormat.toUpperCase()} ${downloadBitrate}k?\n\n` +
-      'The current copies stay available until each new one arrives.'
-    )) return;
+    if (!(await confirmDialog({
+      title: t('Re-download in {format}?', { format: `${downloadFormat.toUpperCase()} ${downloadBitrate}k` }),
+      message: t('{count} track(s) will be downloaded again. The current copies stay available until each new one arrives.', { count: mismatchedTracks.length }),
+      confirmLabel: t('Re-download')
+    }))) return;
 
-    const tracks: Track[] = mismatchedTracks.map(t => ({
-      fileId: t.id,
+    const tracks: Track[] = mismatchedTracks.map(ct => ({
+      fileId: ct.id,
       messageId: 0,
-      channelId: t.channelId || '',
-      channelName: t.channelName || '',
-      fileName: t.fileName,
+      channelId: ct.channelId || '',
+      channelName: ct.channelName || '',
+      fileName: ct.fileName,
       filePath: '',
       fileType: 'Audio' as const,
-      fileSize: t.fileSize,
+      fileSize: ct.fileSize,
       order: 0,
-      dateAdded: t.cachedAt.toISOString(),
-      isLocalFile: (t.streamUrl || '').includes('/stream/local'),
-      streamUrl: t.streamUrl || '',
-      title: t.title,
-      artist: t.artist,
-      album: t.album,
-      duration: t.duration
+      dateAdded: ct.cachedAt.toISOString(),
+      isLocalFile: (ct.streamUrl || '').includes('/stream/local'),
+      streamUrl: ct.streamUrl || '',
+      title: ct.title,
+      artist: ct.artist,
+      album: ct.album,
+      duration: ct.duration
     }));
 
     await downloadManager.addMultipleToQueue(tracks, true);
-    addToast(`${tracks.length} track(s) queued for re-download`, 'success');
+    addToast(t('{count} track(s) queued for re-download', { count: tracks.length }), 'success');
     setActiveTab('queue');
   };
 
@@ -86,7 +91,7 @@ export function DownloadsPage() {
       const pending = allQueue.filter(d => d.status === 'pending' || d.status === 'downloading');
       const failed = allQueue.filter(d => d.status === 'failed');
 
-      console.log('Download queue status:', {
+      log.debug('Download queue status:', {
         total: allQueue.length,
         pending: pending.length,
         failed: failed.length,
@@ -97,7 +102,7 @@ export function DownloadsPage() {
       setDownloads(pending);
       setFailedDownloads(failed);
       setCachedTracks(cached);
-      setTotalCacheSize(cached.reduce((acc, t) => acc + t.fileSize, 0));
+      setTotalCacheSize(cached.reduce((acc, ct) => acc + ct.fileSize, 0));
     } finally {
       setLoading(false);
     }
@@ -154,7 +159,11 @@ export function DownloadsPage() {
   }, [isProcessing, activeDownloads.size, loadData]);
 
   const handleDeleteCachedTrack = async (track: CachedTrackEntity) => {
-    if (!confirm(`Remove "${track.fileName}" from cache?`)) return;
+    if (!(await confirmDialog({
+      message: t('Remove "{name}" from this device?', { name: track.fileName }),
+      confirmLabel: t('Remove'),
+      danger: true
+    }))) return;
 
     try {
       await db.cachedTracks.delete(track.id);
@@ -165,7 +174,12 @@ export function DownloadsPage() {
   };
 
   const handleClearCache = async () => {
-    if (!confirm('Clear all cached tracks?')) return;
+    if (!(await confirmDialog({
+      title: t('Delete all downloads?'),
+      message: t('Every track stored on this device will be removed. This cannot be undone.'),
+      confirmLabel: t('Delete'),
+      danger: true
+    }))) return;
 
     try {
       await db.cachedTracks.clear();
@@ -181,7 +195,7 @@ export function DownloadsPage() {
   };
 
   const handleCancelAllDownloads = async () => {
-    if (!confirm('Cancel all downloads?')) return;
+    if (!(await confirmDialog({ message: t('Cancel all downloads?'), confirmLabel: t('Cancel downloads'), danger: true }))) return;
     await downloadManager.cancelAll();
     loadData();
   };
@@ -193,40 +207,45 @@ export function DownloadsPage() {
 
   const handlePlayCachedTrack = (track: CachedTrackEntity) => {
     // Convert all cached tracks to Track format for the queue
-    const allTracks = cachedTracks.map(t => ({
-      fileId: t.id,
+    const allTracks = cachedTracks.map(ct => ({
+      fileId: ct.id,
       messageId: 0,
-      channelId: t.channelId || '',
-      channelName: t.channelName || '',
-      fileName: t.fileName,
+      channelId: ct.channelId || '',
+      channelName: ct.channelName || '',
+      fileName: ct.fileName,
       filePath: '',
       fileType: 'Audio' as const,
-      fileSize: t.fileSize,
+      fileSize: ct.fileSize,
       order: 0,
-      dateAdded: t.cachedAt.toISOString(),
+      dateAdded: ct.cachedAt.toISOString(),
       isLocalFile: true,
-      streamUrl: t.streamUrl || '',
-      title: t.title || t.fileName.replace(/\.[^/.]+$/, ''),
-      artist: t.artist,
-      album: t.album,
-      duration: t.duration
+      streamUrl: ct.streamUrl || '',
+      title: ct.title || ct.fileName.replace(/\.[^/.]+$/, ''),
+      artist: ct.artist,
+      album: ct.album,
+      duration: ct.duration
     }));
 
     // Find the index of the selected track
-    const startIndex = cachedTracks.findIndex(t => t.id === track.id);
+    const startIndex = cachedTracks.findIndex(ct => ct.id === track.id);
 
     // Play the selected track with all cached tracks as the queue
     play(allTracks[startIndex >= 0 ? startIndex : 0], allTracks, startIndex >= 0 ? startIndex : 0);
   };
 
   const handleClearFailed = async () => {
-    if (!confirm('Clear all failed downloads?')) return;
+    if (!(await confirmDialog({ message: t('Clear all failed downloads?'), confirmLabel: t('Clear') }))) return;
     await db.downloadQueue.where('status').equals('failed').delete();
     loadData();
   };
 
   const handleClearAllQueue = async () => {
-    if (!confirm('Clear entire download queue? This will remove all pending, failed, and completed items.')) return;
+    if (!(await confirmDialog({
+      title: t('Clear the download queue?'),
+      message: t('This removes all pending, failed and completed items.'),
+      confirmLabel: t('Clear'),
+      danger: true
+    }))) return;
     await downloadManager.clearQueue();
     loadData();
   };
@@ -257,7 +276,7 @@ export function DownloadsPage() {
 
   const handlePlayNext = (track: Track) => {
     playNext(track);
-    addToast(`"${track.title || track.fileName}" will play next`, 'info');
+    addToast(t('"{name}" will play next', { name: track.title || track.fileName }), 'info');
   };
 
   const handleShowContextMenu = (track: CachedTrackEntity) => {
@@ -266,20 +285,31 @@ export function DownloadsPage() {
 
   const queueCount = downloads.length + failedDownloads.length;
   const tabs: { key: Tab; label: string }[] = [
-    { key: 'queue', label: `Queue (${queueCount})` },
-    { key: 'cached', label: `Cached (${cachedTracks.length})` }
+    { key: 'queue', label: t('Queue ({count})', { count: queueCount }) },
+    { key: 'cached', label: t('Cached ({count})', { count: cachedTracks.length }) }
   ];
 
   return (
     <div className="flex flex-col min-h-screen lg:min-h-0">
-      <Header title="Downloads" />
+      <Header
+        title={t('Downloads')}
+        actions={
+          <Link
+            to="/storage"
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-800 text-sm text-slate-200 hover:bg-slate-700"
+          >
+            <HardDrive className="w-4 h-4" aria-hidden />
+            {t('Storage')}
+          </Link>
+        }
+      />
 
       {/* Cache size info */}
       <div className="px-4 py-3 bg-slate-800 border-b border-slate-700 flex items-center justify-between">
         <div className="flex items-center gap-3">
           <HardDrive className="w-5 h-5 text-slate-400" />
           <div>
-            <p className="text-sm text-white">Cache Size</p>
+            <p className="text-sm text-white">{t('Cache Size')}</p>
             <p className="text-xs text-slate-400">{formatFileSize(totalCacheSize)}</p>
           </div>
         </div>
@@ -287,12 +317,12 @@ export function DownloadsPage() {
           {pendingAnalysis > 0 && !isAnalyzing && (
             <Button variant="ghost" size="sm" onClick={analyzeExistingTracks}>
               <Search className="w-4 h-4 mr-1" />
-              Analyze ({pendingAnalysis})
+              {t('Analyze ({count})', { count: pendingAnalysis })}
             </Button>
           )}
           {cachedTracks.length > 0 && (
             <Button variant="ghost" size="sm" onClick={handleClearCache}>
-              Clear All
+              {t('Clear All')}
             </Button>
           )}
         </div>
@@ -302,10 +332,10 @@ export function DownloadsPage() {
       {mismatchedTracks.length > 0 && !isAnalyzing && (
         <div className="px-4 py-2 bg-amber-500/10 border-b border-amber-500/20 flex items-center gap-3">
           <p className="text-sm text-amber-300 flex-1">
-            {mismatchedTracks.length} track(s) are not in {downloadFormat.toUpperCase()}
+            {t('{count} track(s) are not in {format}', { count: mismatchedTracks.length, format: downloadFormat.toUpperCase() })}
           </p>
           <Button variant="ghost" size="sm" onClick={handleConvertMismatched}>
-            Re-download
+            {t('Re-download')}
           </Button>
         </div>
       )}
@@ -315,7 +345,7 @@ export function DownloadsPage() {
         <div className="px-4 py-2 bg-emerald-500/10 border-b border-emerald-500/20 flex items-center gap-3">
           <Loader2 className="w-4 h-4 text-emerald-400 animate-spin" />
           <p className="text-sm text-emerald-400">
-            Analyzing metadata... {analysisProgress.current}/{analysisProgress.total}
+            {t('Analyzing metadata... {current}/{total}', { current: analysisProgress.current, total: analysisProgress.total })}
           </p>
         </div>
       )}
@@ -340,7 +370,7 @@ export function DownloadsPage() {
       {/* Content */}
       <div className="flex-1 overflow-y-auto">
         {loading ? (
-          <LoadingScreen message="Loading..." />
+          <LoadingScreen message={t('Loading...')} />
         ) : activeTab === 'queue' ? (
           <DownloadQueue
             downloads={downloads}
@@ -402,13 +432,13 @@ function DownloadQueue({
     return (
       <div className="flex flex-col items-center justify-center py-12 text-slate-400">
         <Download className="w-12 h-12 mb-4 opacity-50" />
-        <p>No active downloads</p>
+        <p>{t('No active downloads')}</p>
         <div className="flex gap-2 mt-4">
           <Button variant="ghost" size="sm" onClick={onClearAllQueue}>
-            Clear Queue
+            {t('Clear Queue')}
           </Button>
           <Button variant="primary" size="sm" onClick={onRestartQueue}>
-            Restart Queue
+            {t('Restart Queue')}
           </Button>
         </div>
       </div>
@@ -421,14 +451,14 @@ function DownloadQueue({
       <div className="p-4 border-b border-slate-700 flex gap-2 flex-wrap">
         {downloads.length > 0 && (
           <Button variant="ghost" size="sm" onClick={onCancelAll}>
-            Cancel All ({downloads.length})
+            {t('Cancel All ({count})', { count: downloads.length })}
           </Button>
         )}
         <Button variant="ghost" size="sm" onClick={onClearAllQueue}>
-          Clear Queue
+          {t('Clear Queue')}
         </Button>
         <Button variant="primary" size="sm" onClick={onRestartQueue}>
-          Restart Queue
+          {t('Restart Queue')}
         </Button>
       </div>
 
@@ -452,7 +482,7 @@ function DownloadQueue({
                 <button
                   onClick={() => onCancel(download.trackId)}
                   className="p-2 text-slate-500 hover:text-red-400 transition-colors"
-                  title="Cancel"
+                  title={t('Cancel')}
                 >
                   <X className="w-4 h-4" />
                 </button>
@@ -473,9 +503,9 @@ function DownloadQueue({
       {failedDownloads.length > 0 && (
         <>
           <div className="p-4 border-b border-slate-700 flex items-center justify-between">
-            <p className="text-sm text-red-400">Failed ({failedDownloads.length})</p>
+            <p className="text-sm text-red-400">{t('Failed ({count})', { count: failedDownloads.length })}</p>
             <Button variant="ghost" size="sm" onClick={onClearFailed}>
-              Clear Failed
+              {t('Clear Failed')}
             </Button>
           </div>
           <div className="divide-y divide-slate-700">
@@ -488,13 +518,13 @@ function DownloadQueue({
                   <div className="flex-1 min-w-0">
                     <p className="text-sm text-white truncate">{download.fileName}</p>
                     <p className="text-xs text-red-400 truncate">
-                      {download.errorMessage || 'Download failed'}
+                      {download.errorMessage || t('Download failed')}
                     </p>
                   </div>
                   <button
                     onClick={() => onRetry(download.trackId)}
                     className="p-2 text-slate-500 hover:text-emerald-400 transition-colors"
-                    title="Retry"
+                    title={t('Retry')}
                   >
                     <RotateCcw className="w-4 h-4" />
                   </button>
@@ -560,8 +590,8 @@ function CachedTracksList({ tracks, onDelete, onPlay, onLongPress }: CachedTrack
     return (
       <div className="flex flex-col items-center justify-center py-12 text-slate-400">
         <Music className="w-12 h-12 mb-4 opacity-50" />
-        <p>No cached tracks</p>
-        <p className="text-sm mt-2">Download tracks for offline listening</p>
+        <p>{t('No cached tracks')}</p>
+        <p className="text-sm mt-2">{t('Download tracks for offline listening')}</p>
       </div>
     );
   }
@@ -585,7 +615,7 @@ function CachedTracksList({ tracks, onDelete, onPlay, onLongPress }: CachedTrack
         >
           <div className="w-12 h-12 bg-slate-700 rounded-lg flex items-center justify-center shrink-0 overflow-hidden">
             {track.coverArt ? (
-              <img src={track.coverArt} alt="Cover" className="w-full h-full object-cover" />
+              <img src={track.coverArt} alt={t('Cover')} className="w-full h-full object-cover" />
             ) : (
               <Music className="w-5 h-5 text-emerald-400" />
             )}

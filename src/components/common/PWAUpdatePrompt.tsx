@@ -1,5 +1,7 @@
 import { useRegisterSW } from 'virtual:pwa-register/react';
 import { RefreshCw, X } from 'lucide-react';
+import { log } from '@/utils/logger';
+import { t } from '@/i18n';
 
 export function PWAUpdatePrompt() {
   const {
@@ -13,7 +15,7 @@ export function PWAUpdatePrompt() {
           r.update();
         }, 30 * 1000);
       }
-      console.log('SW registered:', swUrl);
+      log.debug('SW registered:', swUrl);
     },
     onRegisterError(error) {
       console.error('SW registration error:', error);
@@ -35,18 +37,18 @@ export function PWAUpdatePrompt() {
       <div className="flex items-center gap-3 px-4 py-3 rounded-lg border bg-emerald-900/95 border-emerald-600 backdrop-blur-sm shadow-lg">
         <RefreshCw className="w-5 h-5 text-emerald-400 flex-shrink-0" />
         <p className="flex-1 text-sm text-white">
-          New version available
+          {t('New version available')}
         </p>
         <button
           onClick={handleUpdate}
           className="px-3 py-1.5 text-sm font-medium bg-emerald-500 hover:bg-emerald-400 text-white rounded-lg transition-colors"
         >
-          Update
+          {t('Update')}
         </button>
         <button
           onClick={handleDismiss}
           className="p-1 text-slate-400 hover:text-white transition-colors"
-          title="Dismiss"
+          title={t('Dismiss')}
         >
           <X className="w-4 h-4" />
         </button>

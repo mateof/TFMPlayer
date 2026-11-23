@@ -4,6 +4,7 @@ import { useAudioPlayer } from '@/hooks/useAudioPlayer';
 import { useUiStore } from '@/stores/uiStore';
 import { db } from '@/db/database';
 import { formatDuration, formatFileSize } from '@/utils/format';
+import { t } from '@/i18n';
 
 // Rendering thousands of rows for a long channel queue is wasted work:
 // the panel shows a window of what is coming next
@@ -54,17 +55,17 @@ export function NowPlayingPanel() {
   const remaining = queue.length - currentIndex - upcoming.length;
 
   const details: { label: string; value: string }[] = [
-    { label: 'Format', value: info.audioFormat ? `${info.audioFormat}${info.audioBitrate ? ` · ${info.audioBitrate} kbps` : ''}` : extension },
-    { label: 'Size', value: currentTrack.fileSize ? formatFileSize(currentTrack.fileSize) : '—' },
-    { label: 'Duration', value: duration ? formatDuration(duration) : '—' },
-    { label: 'Source', value: currentTrack.isLocalFile ? 'Server local files' : currentTrack.channelName || 'Channel' }
+    { label: t('Format'), value: info.audioFormat ? `${info.audioFormat}${info.audioBitrate ? ` · ${info.audioBitrate} kbps` : ''}` : extension },
+    { label: t('Size'), value: currentTrack.fileSize ? formatFileSize(currentTrack.fileSize) : '—' },
+    { label: t('Duration'), value: duration ? formatDuration(duration) : '—' },
+    { label: t('Source'), value: currentTrack.isLocalFile ? t('Server local files') : currentTrack.channelName || t('Channel') }
   ];
 
   return (
     <aside className="w-80 h-full min-h-0 flex flex-col bg-slate-950 border-l border-slate-800">
       <div className="flex items-center justify-between px-4 h-14 shrink-0">
-        <span className="text-sm font-semibold text-white">Now playing</span>
-        <button onClick={toggle} className="p-1.5 text-slate-400 hover:text-white" title="Hide panel">
+        <span className="text-sm font-semibold text-white">{t('Now playing')}</span>
+        <button onClick={toggle} className="p-1.5 text-slate-400 hover:text-white" title={t('Hide panel')}>
           <X className="w-4 h-4" />
         </button>
       </div>
@@ -97,17 +98,17 @@ export function NowPlayingPanel() {
             </div>
           ))}
           <div className="flex justify-between gap-3 px-3 py-2">
-            <span className="text-slate-500">Offline</span>
+            <span className="text-slate-500">{t('Offline')}</span>
             <span className={`flex items-center gap-1 ${info.cached ? 'text-emerald-400' : 'text-slate-400'}`}>
               {info.cached ? <HardDrive className="w-3.5 h-3.5" /> : <CloudDownload className="w-3.5 h-3.5" />}
-              {info.cached ? 'Stored on device' : 'Streaming'}
+              {info.cached ? t('Stored on device') : t('Streaming')}
             </span>
           </div>
         </div>
 
         <div>
           <p className="text-xs text-slate-500 uppercase tracking-wide mb-2">
-            Queue · {currentIndex + 1} of {queue.length}
+            {t('Queue')} · {t('{n} of {total}', { n: currentIndex + 1, total: queue.length })}
           </p>
           <div className="space-y-0.5">
             {upcoming.map((track, offset) => {
@@ -135,7 +136,7 @@ export function NowPlayingPanel() {
               );
             })}
             {remaining > 0 && (
-              <p className="px-2 py-1.5 text-xs text-slate-500">+{remaining} more</p>
+              <p className="px-2 py-1.5 text-xs text-slate-500">{t('+{count} more', { count: remaining })}</p>
             )}
           </div>
         </div>

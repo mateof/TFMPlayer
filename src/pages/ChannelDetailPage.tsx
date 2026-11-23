@@ -12,6 +12,7 @@ import { usePlayerStore } from '@/stores/playerStore';
 import { queryKeys } from '@/services/query/queryClient';
 import { fileToTrack } from '@/utils/channelTracks';
 import { collectChannelFolderTracks } from '@/utils/collectTracks';
+import { t } from '@/i18n';
 
 interface FolderBreadcrumb {
   id: string;
@@ -122,21 +123,21 @@ export function ChannelDetailPage() {
     <>
       <FileBrowser
         source={source}
-        title={channelName || 'Channel'}
-        subtitle={(total) => `${total} files${stats ? ` · ${stats.totalSizeText} indexed` : ''}`}
+        title={channelName || t('Channel')}
+        subtitle={(total) => t('{count} files', { count: total }) + (stats ? ` · ${t('{size} indexed', { size: stats.totalSizeText })}` : '')}
         backPath="/channels"
         breadcrumbs={folderPath.map((f) => f.name)}
         onNavigateBreadcrumb={navigateBreadcrumb}
         onOpenFolder={(file) => openFolder({ id: file.id, name: file.name })}
         onQueueStarted={registerQueueSource}
-        emptyHint="Try changing the filter or refreshing the channel"
+        emptyHint={t('Try changing the filter or refreshing the channel')}
         headerActions={
           <button
             onClick={() => setShowRefreshDialog(true)}
             disabled={refreshRunning || !channelName}
             className="p-2 text-slate-400 hover:text-white transition-colors disabled:opacity-60"
-            aria-label={refreshRunning ? 'Refreshing channel' : 'Refresh channel from Telegram'}
-            title={refreshRunning ? 'Refreshing channel...' : 'Refresh channel from Telegram'}
+            aria-label={refreshRunning ? t('Refreshing channel') : t('Refresh channel from Telegram')}
+            title={refreshRunning ? t('Refreshing channel...') : t('Refresh channel from Telegram')}
           >
             <RefreshCw className={`w-5 h-5 ${refreshRunning ? 'animate-spin text-emerald-400' : ''}`} aria-hidden />
           </button>
@@ -145,7 +146,7 @@ export function ChannelDetailPage() {
           refreshRunning ? (
             <div role="status" className="lg:hidden flex items-center gap-2 px-4 py-2 text-xs text-emerald-300 bg-emerald-500/10 border-b border-slate-700">
               <Loader2 className="w-3.5 h-3.5 animate-spin" aria-hidden />
-              Refreshing channel on the server. The list reloads when it finishes.
+              {t('Refreshing channel on the server. The list reloads when it finishes.')}
             </div>
           ) : undefined
         }

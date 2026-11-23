@@ -1,3 +1,6 @@
+// Tests assert on the English source strings (i18n keys)
+localStorage.setItem('tfm.language', 'en');
+
 // In-memory IndexedDB so Dexie works under jsdom
 import 'fake-indexeddb/auto';
 import { afterEach } from 'vitest';

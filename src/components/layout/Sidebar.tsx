@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { NavLink } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import {
-  Radio, HardDrive, ListMusic, Download, Settings, Star, Loader2, AudioLines, Search, ListPlus
+  Radio, HardDrive, ListMusic, Download, Settings, Star, Loader2, AudioLines, Search, ListPlus, History
 } from 'lucide-react';
 import { useDownloadStore } from '@/services/download/DownloadManager';
 import { useChannelRefreshStore } from '@/services/channelRefresh/ChannelRefreshService';
@@ -13,14 +13,16 @@ import { isTrackDrag, readDragPayload, resolveDragPayload } from '@/utils/dragTr
 import { queryKeys } from '@/services/query/queryClient';
 import { useUiStore } from '@/stores/uiStore';
 import type { Playlist } from '@/types/models';
+import { t } from '@/i18n';
 
 const navItems = [
-  { to: '/channels', icon: Radio, label: 'Channels' },
-  { to: '/search', icon: Search, label: 'Search' },
-  { to: '/local', icon: HardDrive, label: 'Local files' },
-  { to: '/playlists', icon: ListMusic, label: 'Playlists' },
-  { to: '/downloads', icon: Download, label: 'Downloads' },
-  { to: '/settings', icon: Settings, label: 'Settings' }
+  { to: '/channels', icon: Radio, label: t('Channels') },
+  { to: '/search', icon: Search, label: t('Search') },
+  { to: '/local', icon: HardDrive, label: t('Local files') },
+  { to: '/playlists', icon: ListMusic, label: t('Playlists') },
+  { to: '/history', icon: History, label: t('History') },
+  { to: '/downloads', icon: Download, label: t('Downloads') },
+  { to: '/settings', icon: Settings, label: t('Settings') }
 ];
 
 const linkClass = ({ isActive }: { isActive: boolean }) =>
@@ -37,7 +39,7 @@ export function Sidebar() {
   const playlists = usePlaylistsQuery().data ?? [];
 
   return (
-    <aside className="flex flex-col h-full min-h-0 bg-slate-950 border-r border-slate-800" aria-label="Main navigation">
+    <aside className="flex flex-col h-full min-h-0 bg-slate-950 border-r border-slate-800" aria-label={t('Main navigation')}>
       <div className="flex items-center gap-2 px-5 h-14 shrink-0">
         <AudioLines className="w-6 h-6 text-emerald-400" aria-hidden />
         <span className="font-semibold text-white">TFM Player</span>
@@ -49,7 +51,7 @@ export function Sidebar() {
             <Icon className="w-5 h-5" aria-hidden />
             <span className="flex-1">{label}</span>
             {to === '/downloads' && activeDownloads > 0 && (
-              <span className="px-1.5 py-0.5 rounded-full bg-emerald-500 text-white text-xs tabular-nums" aria-label={`${activeDownloads} downloading`}>
+              <span className="px-1.5 py-0.5 rounded-full bg-emerald-500 text-white text-xs tabular-nums" aria-label={t('{count} downloading', { count: activeDownloads })}>
                 {activeDownloads}
               </span>
             )}
@@ -59,7 +61,7 @@ export function Sidebar() {
 
       {runningRefreshes.length > 0 && (
         <div className="mx-3 mt-4 p-3 rounded-lg bg-emerald-500/10 space-y-1.5" role="status">
-          <p className="text-xs text-emerald-300 uppercase tracking-wide">Refreshing</p>
+          <p className="text-xs text-emerald-300 uppercase tracking-wide">{t('Refreshing')}</p>
           {runningRefreshes.map((job) => (
             <NavLink
               key={job.channelId}
@@ -74,10 +76,10 @@ export function Sidebar() {
       )}
 
       <div className="flex-1 min-h-0 overflow-y-auto pb-3">
-        <SectionTitle icon={<Star className="w-3.5 h-3.5" aria-hidden />} label="Favorites" />
+        <SectionTitle icon={<Star className="w-3.5 h-3.5" aria-hidden />} label={t('Favorites')} />
         <div className="px-3 space-y-0.5">
           {favorites.length === 0 ? (
-            <p className="px-3 py-2 text-xs text-slate-500">Star a channel to pin it here.</p>
+            <p className="px-3 py-2 text-xs text-slate-500">{t('Star a channel to pin it here.')}</p>
           ) : (
             favorites.map((ch) => (
               <NavLink key={ch.id} to={`/channels/${ch.id}`} className={linkClass}>
@@ -88,10 +90,10 @@ export function Sidebar() {
           )}
         </div>
 
-        <SectionTitle icon={<ListMusic className="w-3.5 h-3.5" aria-hidden />} label="Playlists" />
+        <SectionTitle icon={<ListMusic className="w-3.5 h-3.5" aria-hidden />} label={t('Playlists')} />
         <div className="px-3 space-y-0.5">
           {playlists.length === 0 ? (
-            <p className="px-3 py-2 text-xs text-slate-500">No playlists yet.</p>
+            <p className="px-3 py-2 text-xs text-slate-500">{t('No playlists yet.')}</p>
           ) : (
             playlists.map((pl) => <PlaylistDropTarget key={pl.id} playlist={pl} />)
           )}
@@ -123,11 +125,11 @@ function PlaylistDropTarget({ playlist }: { playlist: Playlist }) {
     const items = readDragPayload(e);
     if (!items || busy) return;
 
-    setBusy('Preparing...');
+    setBusy(t('Preparing...'));
     try {
       const tracks = await resolveDragPayload(items, setBusy);
       if (tracks.length === 0) {
-        addToast('No audio in what was dropped', 'info');
+        addToast(t('No audio in what was dropped'), 'info');
         return;
       }
       await addTracksToPlaylist(playlist.id, playlist.name, tracks, (done, total) =>
@@ -136,7 +138,7 @@ function PlaylistDropTarget({ playlist }: { playlist: Playlist }) {
       queryClient.invalidateQueries({ queryKey: queryKeys.playlists.all });
     } catch (error) {
       console.error('Drop on playlist failed:', error);
-      addToast(`Could not add to "${playlist.name}"`, 'error');
+      addToast(t('Could not add to "{name}"', { name: playlist.name }), 'error');
     } finally {
       setBusy(null);
     }
@@ -158,7 +160,7 @@ function PlaylistDropTarget({ playlist }: { playlist: Playlist }) {
       }}
       onDragLeave={() => setOver(false)}
       onDrop={handleDrop}
-      title={`Drop tracks here to add them to "${playlist.name}"`}
+      title={t('Drop tracks here to add them to "{name}"', { name: playlist.name })}
     >
       {busy ? (
         <Loader2 className="w-4 h-4 shrink-0 animate-spin text-emerald-400" aria-hidden />
@@ -168,7 +170,7 @@ function PlaylistDropTarget({ playlist }: { playlist: Playlist }) {
         <ListMusic className="w-4 h-4 shrink-0" aria-hidden />
       )}
       <span className="flex-1 truncate">{playlist.name}</span>
-      <span className="text-xs text-slate-500 tabular-nums" aria-label={busy ?? `${playlist.trackCount} tracks`}>
+      <span className="text-xs text-slate-500 tabular-nums" aria-label={busy ?? t('{count} tracks', { count: playlist.trackCount })}>
         {busy ?? playlist.trackCount}
       </span>
     </NavLink>

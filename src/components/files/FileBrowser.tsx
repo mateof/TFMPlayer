@@ -23,6 +23,7 @@ import { dedupeTracks, MAX_SELECTION_TRACKS } from '@/utils/collectTracks';
 import { setDragPayload, type DragItem } from '@/utils/dragTracks';
 import { formatDate, formatFileSize } from '@/utils/format';
 import type { ChannelFile, Track } from '@/types/models';
+import { t } from '@/i18n';
 
 export const FILE_PAGE_SIZE = 50;
 
@@ -92,7 +93,7 @@ const categoryIcons: Record<string, ReactNode> = {
 };
 
 function fileExtension(file: ChannelFile): string {
-  if (file.category === 'Folder') return 'Folder';
+  if (file.category === 'Folder') return t('Folder');
   const dot = file.name.lastIndexOf('.');
   return dot > 0 ? file.name.slice(dot + 1).toUpperCase() : file.type || '';
 }
@@ -113,7 +114,7 @@ export function FileBrowser({
   onQueueStarted,
   sidePanel,
   banner,
-  emptyHint = 'Try changing the filter'
+  emptyHint = t('Try changing the filter')
 }: FileBrowserProps) {
   const addToast = useUiStore((s) => s.addToast);
   const { play, playNext } = useAudioPlayer();
@@ -165,7 +166,7 @@ export function FileBrowser({
   const { hasNextPage, isFetchingNextPage, fetchNextPage } = query;
 
   useEffect(() => {
-    if (query.isError && !query.data) addToast('Failed to load files', 'error');
+    if (query.isError && !query.data) addToast(t('Failed to load files'), 'error');
   }, [query.isError, query.data, addToast]);
 
   const audioFiles = useMemo(() => files.filter((f) => f.category === 'Audio'), [files]);
@@ -213,7 +214,7 @@ export function FileBrowser({
 
   const startQueue = (startFile?: ChannelFile) => {
     if (audioFiles.length === 0) {
-      addToast('No audio files to play', 'info');
+      addToast(t('No audio files to play'), 'info');
       return;
     }
     const tracks = audioFiles.map(source.toTrack);
@@ -314,9 +315,9 @@ export function FileBrowser({
       if (file.category === 'Audio') {
         collected.push(source.toTrack(file));
       } else if (file.category === 'Folder') {
-        setBulkLabel(`Scanning "${file.name}"...`);
+        setBulkLabel(t('Scanning "{name}"...', { name: file.name }));
         collected.push(...await source.collectFolder(file, (found) =>
-          setBulkLabel(`Scanning "${file.name}" - ${found} tracks found`)
+          setBulkLabel(t('Scanning "{name}" - {count} tracks found', { name: file.name, count: found }))
         ));
       }
     }
@@ -325,20 +326,20 @@ export function FileBrowser({
 
   const withSelectedTracks = async (action: (tracks: Track[]) => void | Promise<void>) => {
     setBulkBusy(true);
-    setBulkLabel('Preparing...');
+    setBulkLabel(t('Preparing...'));
     try {
       const tracks = await buildSelectedTracks();
       if (tracks.length === 0) {
-        addToast('No audio in the selection', 'info');
+        addToast(t('No audio in the selection'), 'info');
         return;
       }
       if (tracks.length >= MAX_SELECTION_TRACKS) {
-        addToast(`Selection capped at the first ${MAX_SELECTION_TRACKS} tracks`, 'warning');
+        addToast(t('Selection capped at the first {count} tracks', { count: MAX_SELECTION_TRACKS }), 'warning');
       }
       await action(tracks);
     } catch (error) {
       console.error('Bulk action failed:', error);
-      addToast('Could not complete the action', 'error');
+      addToast(t('Could not complete the action'), 'error');
     } finally {
       setBulkBusy(false);
       setBulkLabel('');
@@ -349,14 +350,14 @@ export function FileBrowser({
     withSelectedTracks((tracks) => {
       // Insert backwards so the selection keeps its order in the queue
       for (let i = tracks.length - 1; i >= 0; i--) playNext(tracks[i]);
-      addToast(`${tracks.length} track(s) will play next`, 'success');
+      addToast(t('{count} track(s) will play next', { count: tracks.length }), 'success');
       selection.exitSelection();
     });
 
   const handleBulkDownload = () =>
     withSelectedTracks(async (tracks) => {
       await downloadManager.addMultipleToQueue(tracks);
-      addToast(`${tracks.length} track(s) queued for download`, 'success');
+      addToast(t('{count} track(s) queued for download', { count: tracks.length }), 'success');
       selection.exitSelection();
     });
 
@@ -371,7 +372,7 @@ export function FileBrowser({
     <div className="flex flex-col h-screen lg:h-full">
       <Header
         title={title}
-        subtitle={subtitle ? subtitle(totalCount) : `${totalCount} files`}
+        subtitle={subtitle ? subtitle(totalCount) : t('{count} files', { count: totalCount })}
         showBack
         backPath={backPath}
         actions={headerActions}
@@ -379,7 +380,7 @@ export function FileBrowser({
 
       <div className="flex-1 min-h-0 flex">
         {sidePanel && (
-          <aside className="hidden lg:block w-72 xl:w-80 shrink-0 border-r border-slate-700 overflow-y-auto" aria-label="Details and filters">
+          <aside className="hidden lg:block w-72 xl:w-80 shrink-0 border-r border-slate-700 overflow-y-auto" aria-label={t('Details and filters')}>
             {sidePanel(filterControls)}
           </aside>
         )}
@@ -401,11 +402,11 @@ export function FileBrowser({
               onCancel={selection.exitSelection}
             />
           ) : (
-            <div className="flex items-center gap-2 px-4 py-2 bg-slate-800 border-b border-slate-700" role="toolbar" aria-label="File list">
+            <div className="flex items-center gap-2 px-4 py-2 bg-slate-800 border-b border-slate-700" role="toolbar" aria-label={t('File list')}>
               <button
                 onClick={() => setShowSearch(!showSearch)}
                 aria-pressed={showSearch}
-                aria-label="Search files"
+                aria-label={t('Search files')}
                 className={`p-2 rounded-lg transition-colors ${showSearch ? 'bg-emerald-500 text-white' : 'bg-slate-700 text-slate-300'}`}
               >
                 <Search className="w-5 h-5" aria-hidden />
@@ -416,7 +417,7 @@ export function FileBrowser({
                 onClick={() => setShowFilters(!showFilters)}
                 aria-pressed={showFilters}
                 aria-expanded={showFilters}
-                aria-label="Filters and sorting"
+                aria-label={t('Filters and sorting')}
                 className={`${sidePanel ? 'lg:hidden' : ''} p-2 rounded-lg transition-colors ${showFilters ? 'bg-emerald-500 text-white' : 'bg-slate-700 text-slate-300'}`}
               >
                 <SlidersHorizontal className="w-5 h-5" aria-hidden />
@@ -426,14 +427,14 @@ export function FileBrowser({
                 onClick={() => files[0] && selection.startWith(files[0])}
                 disabled={files.length === 0}
                 className="hidden lg:flex items-center gap-1.5 px-3 py-2 rounded-lg bg-slate-700 text-slate-300 text-sm hover:bg-slate-600 disabled:opacity-50"
-                title="Select files (or Ctrl+click, or Space on a row)"
+                title={t('Select files (or Ctrl+click, or Space on a row)')}
               >
                 <ListChecks className="w-4 h-4" aria-hidden />
-                Select
+                {t('Select')}
               </button>
 
               <span className="px-3 py-1 text-xs bg-slate-700 rounded-full text-slate-300">
-                {FILTER_OPTIONS.find((f) => f.key === filterMode)?.label}
+                {t(FILTER_OPTIONS.find((f) => f.key === filterMode)?.label ?? '')}
               </span>
 
               <div className="flex-1" />
@@ -443,7 +444,7 @@ export function FileBrowser({
                 className="flex items-center gap-2 px-4 py-2 bg-emerald-500 text-white rounded-lg text-sm font-medium"
               >
                 <Play className="w-4 h-4" fill="currentColor" aria-hidden />
-                Play All
+                {t('Play All')}
               </button>
             </div>
           )}
@@ -455,13 +456,13 @@ export function FileBrowser({
                 type="search"
                 value={searchText}
                 onChange={(e) => setSearchText(e.target.value)}
-                placeholder="Search files..."
-                aria-label="Search files in this folder"
+                placeholder={t('Search files...')}
+                aria-label={t('Search files in this folder')}
                 className="flex-1 bg-transparent text-white placeholder-slate-400 outline-none"
                 autoFocus
               />
               {searchText && (
-                <button onClick={() => setSearchText('')} className="p-1 text-slate-400" aria-label="Clear search">
+                <button onClick={() => setSearchText('')} className="p-1 text-slate-400" aria-label={t('Clear search')}>
                   <X className="w-4 h-4" aria-hidden />
                 </button>
               )}
@@ -475,9 +476,9 @@ export function FileBrowser({
           )}
 
           {breadcrumbs.length > 0 && (
-            <nav aria-label="Folder path" className="flex items-center gap-2 px-4 py-2 text-sm overflow-x-auto no-scrollbar bg-slate-800/50">
+            <nav aria-label={t('Folder path')} className="flex items-center gap-2 px-4 py-2 text-sm overflow-x-auto no-scrollbar bg-slate-800/50">
               <button onClick={() => onNavigateBreadcrumb(-1)} className="text-emerald-400 hover:underline whitespace-nowrap">
-                Root
+                {t('Root')}
               </button>
               {breadcrumbs.map((name, index) => {
                 const isLast = index === breadcrumbs.length - 1;
@@ -501,28 +502,28 @@ export function FileBrowser({
             <div className="hidden lg:flex items-center gap-4 px-4 py-2 text-xs uppercase tracking-wide text-slate-500 border-b border-slate-700" aria-hidden>
               {selection.selectionMode && <span className="w-5 shrink-0" />}
               <span className="w-10 shrink-0" />
-              <span className="flex-1">Name</span>
-              <span className="w-16 shrink-0">Type</span>
-              <span className="w-20 shrink-0 text-right">Size</span>
-              <span className="hidden xl:block w-28 shrink-0">Date</span>
+              <span className="flex-1">{t('Name')}</span>
+              <span className="w-16 shrink-0">{t('Type')}</span>
+              <span className="w-20 shrink-0 text-right">{t('Size')}</span>
+              <span className="hidden xl:block w-28 shrink-0">{t('Date')}</span>
               <span className="w-[7.5rem] shrink-0" />
             </div>
           )}
 
           <div ref={listRef} onScroll={handleListScroll} className="flex-1 overflow-y-auto">
             {loading ? (
-              <LoadingScreen message="Loading files..." />
+              <LoadingScreen message={t('Loading files...')} />
             ) : files.length === 0 ? (
               <div className="flex flex-col items-center justify-center py-12 text-slate-400">
                 <Folder className="w-12 h-12 mb-4 opacity-50" aria-hidden />
-                <p>No files found</p>
+                <p>{t('No files found')}</p>
                 <p className="text-sm mt-2">{emptyHint}</p>
               </div>
             ) : (
               <>
                 <div
                   role="list"
-                  aria-label={`${files.length} of ${totalCount} files`}
+                  aria-label={t('{count} of {total} files', { count: files.length, total: totalCount })}
                   className="relative w-full"
                   style={{ height: virtualizer.getTotalSize() }}
                 >
@@ -542,7 +543,10 @@ export function FileBrowser({
                         role="listitem"
                         tabIndex={0}
                         aria-selected={selection.selectionMode ? selected : undefined}
-                        aria-label={`${isFolder ? 'Folder' : isAudio ? 'Track' : 'File'} ${file.name}${cached ? ', on device' : ''}`}
+                        aria-label={t(cached ? '{kind} {name}, on device' : '{kind} {name}', {
+                          kind: isFolder ? t('Folder') : isAudio ? t('Track') : t('File'),
+                          name: file.name
+                        })}
                         onClick={(e) => handleRowClick(file, e)}
                         onKeyDown={(e) => handleRowKeyDown(file, virtualRow.index, e)}
                         {...longPress.bind(file)}
@@ -593,19 +597,19 @@ export function FileBrowser({
                                 onClick={(e) => {
                                   stop(e);
                                   playNext(source.toTrack(file));
-                                  addToast('Will play next', 'success');
+                                  addToast(t('Will play next'), 'success');
                                 }}
                                 onMouseDown={stop}
                                 onTouchStart={stop}
                                 className="hidden lg:block p-2 text-slate-500 hover:text-emerald-400 transition-colors lg:opacity-0 lg:group-hover:opacity-100 lg:group-focus-within:opacity-100 focus-visible:opacity-100"
-                                aria-label={`Play ${file.name} next`}
-                                title="Play next"
+                                aria-label={t('Play {name} next', { name: file.name })}
+                                title={t('Play next')}
                               >
                                 <ListPlus className="w-5 h-5" aria-hidden />
                               </button>
                               {!cached && (
                                 activeDownloads.has(file.id) ? (
-                                  <span className="p-2 text-amber-400 text-xs tabular-nums" aria-label={`Downloading ${activeDownloads.get(file.id)}%`}>
+                                  <span className="p-2 text-amber-400 text-xs tabular-nums" aria-label={t('Downloading {percent}%', { percent: activeDownloads.get(file.id) ?? 0 })}>
                                     {activeDownloads.get(file.id)}%
                                   </span>
                                 ) : (
@@ -613,13 +617,13 @@ export function FileBrowser({
                                     onClick={async (e) => {
                                       stop(e);
                                       await downloadManager.addToQueue(source.toTrack(file));
-                                      addToast('Added to download queue', 'info');
+                                      addToast(t('Added to download queue'), 'info');
                                     }}
                                     onMouseDown={stop}
                                     onTouchStart={stop}
                                     className="p-2 text-slate-500 hover:text-emerald-400 transition-colors"
-                                    aria-label={`Download ${file.name}`}
-                                    title="Download"
+                                    aria-label={t('Download {name}', { name: file.name })}
+                                    title={t('Download')}
                                   >
                                     <Download className="w-5 h-5" aria-hidden />
                                   </button>
@@ -633,8 +637,8 @@ export function FileBrowser({
                                 onMouseDown={stop}
                                 onTouchStart={stop}
                                 className="p-2 text-slate-500 hover:text-emerald-400 transition-colors"
-                                aria-label={`Add ${file.name} to a playlist`}
-                                title="Add to playlist"
+                                aria-label={t('Add {name} to a playlist', { name: file.name })}
+                                title={t('Add to playlist')}
                               >
                                 <Plus className="w-5 h-5" aria-hidden />
                               </button>
@@ -652,13 +656,13 @@ export function FileBrowser({
                 {isFetchingNextPage && (
                   <div className="flex items-center justify-center py-4 gap-2 text-slate-400" role="status">
                     <Loader2 className="w-5 h-5 animate-spin" aria-hidden />
-                    <span className="text-sm">Loading more...</span>
+                    <span className="text-sm">{t('Loading more...')}</span>
                   </div>
                 )}
 
                 <div className="py-3 text-center text-xs text-slate-500">
-                  {files.length} of {totalCount} files
-                  {isDesktop && <span className="ml-2">· drag tracks or folders onto a playlist in the sidebar</span>}
+                  {t('{count} of {total} files', { count: files.length, total: totalCount })}
+                  {isDesktop && <span className="ml-2">· {t('drag tracks or folders onto a playlist in the sidebar')}</span>}
                 </div>
               </>
             )}

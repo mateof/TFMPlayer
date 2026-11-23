@@ -8,6 +8,7 @@ import { useUiStore } from '@/stores/uiStore';
 import { isPlaylistOffline } from '@/db/database';
 import { addTracksToPlaylist } from '@/services/playlists/addToPlaylist';
 import { useDialog } from '@/hooks/useDialog';
+import { t } from '@/i18n';
 import type { Track, Playlist } from '@/types/models';
 
 interface PlaylistPickerProps {
@@ -47,7 +48,7 @@ export function PlaylistPicker({ tracks, onClose, onAdded }: PlaylistPickerProps
       const offline = await Promise.all(data.map((p) => isPlaylistOffline(p.id)));
       setOfflinePlaylistIds(new Set(data.filter((_, i) => offline[i]).map((p) => p.id)));
     } catch (error) {
-      addToast('Failed to load playlists', 'error');
+      addToast(t('Failed to load playlists'), 'error');
       console.error(error);
     } finally {
       setLoading(false);
@@ -64,7 +65,7 @@ export function PlaylistPicker({ tracks, onClose, onAdded }: PlaylistPickerProps
       onAdded?.();
       onClose();
     } catch (error) {
-      addToast('Failed to add tracks', 'error');
+      addToast(t('Failed to add tracks'), 'error');
       console.error(error);
     } finally {
       setAddingTo(null);
@@ -86,7 +87,7 @@ export function PlaylistPicker({ tracks, onClose, onAdded }: PlaylistPickerProps
       onAdded?.();
       onClose();
     } catch (error) {
-      addToast('Failed to create playlist', 'error');
+      addToast(t('Failed to create playlist'), 'error');
       console.error(error);
     } finally {
       setCreating(false);
@@ -106,11 +107,11 @@ export function PlaylistPicker({ tracks, onClose, onAdded }: PlaylistPickerProps
       <div {...dialogProps} className="relative w-full max-w-md bg-slate-800 rounded-t-2xl sm:rounded-2xl max-h-[80vh] overflow-hidden outline-none">
         {/* Header */}
         <div className="flex items-center justify-between p-4 border-b border-slate-700">
-          <h2 id="playlist-picker-title" className="text-lg font-bold text-white">Add to Playlist</h2>
+          <h2 id="playlist-picker-title" className="text-lg font-bold text-white">{t('Add to playlist')}</h2>
           <button
             onClick={onClose}
             className="p-2 text-slate-400 hover:text-white transition-colors"
-            aria-label="Close"
+            aria-label={t('Close')}
           >
             <X className="w-5 h-5" aria-hidden />
           </button>
@@ -128,9 +129,9 @@ export function PlaylistPicker({ tracks, onClose, onAdded }: PlaylistPickerProps
           <div className="flex-1 min-w-0">
             {isMultiple ? (
               <>
-                <p className="text-sm text-white">{tracks.length} tracks selected</p>
+                <p className="text-sm text-white">{t('{count} tracks selected', { count: tracks.length })}</p>
                 <p className="text-xs text-slate-400 truncate">
-                  {firstTrack.title || firstTrack.fileName} and {tracks.length - 1} more
+                  {t('{name} and {count} more', { name: firstTrack.title || firstTrack.fileName, count: tracks.length - 1 })}
                 </p>
               </>
             ) : (
@@ -150,7 +151,7 @@ export function PlaylistPicker({ tracks, onClose, onAdded }: PlaylistPickerProps
         {progress && progress.total > 1 && (
           <div className="px-4 py-2 bg-slate-700/30">
             <div className="flex items-center justify-between text-xs text-emerald-400 mb-1">
-              <span>Adding tracks...</span>
+              <span>{t('Adding tracks...')}</span>
               <span className="tabular-nums">{progress.done}/{progress.total}</span>
             </div>
             <div className="h-1 bg-slate-600 rounded-full overflow-hidden">
@@ -174,7 +175,8 @@ export function PlaylistPicker({ tracks, onClose, onAdded }: PlaylistPickerProps
               {showCreate ? (
                 <div className="p-3 bg-slate-700/50 rounded-lg mb-2">
                   <Input
-                    placeholder="Playlist name"
+                    placeholder={t('Playlist name')}
+                    aria-label={t('Playlist name')}
                     value={newPlaylistName}
                     onChange={(e) => setNewPlaylistName(e.target.value)}
                     autoFocus
@@ -186,7 +188,7 @@ export function PlaylistPicker({ tracks, onClose, onAdded }: PlaylistPickerProps
                       onClick={() => setShowCreate(false)}
                       disabled={creating}
                     >
-                      Cancel
+                      {t('Cancel')}
                     </Button>
                     <Button
                       variant="primary"
@@ -196,10 +198,10 @@ export function PlaylistPicker({ tracks, onClose, onAdded }: PlaylistPickerProps
                       className="flex-1"
                     >
                       {creating
-                        ? 'Creating...'
+                        ? t('Creating...')
                         : isMultiple
-                          ? `Create & Add ${tracks.length}`
-                          : 'Create & Add'}
+                          ? t('Create & Add {count}', { count: tracks.length })
+                          : t('Create & Add')}
                     </Button>
                   </div>
                 </div>
@@ -211,14 +213,14 @@ export function PlaylistPicker({ tracks, onClose, onAdded }: PlaylistPickerProps
                   <div className="w-10 h-10 bg-emerald-500/20 rounded-lg flex items-center justify-center">
                     <Plus className="w-5 h-5 text-emerald-400" />
                   </div>
-                  <span className="text-emerald-400 font-medium">Create New Playlist</span>
+                  <span className="text-emerald-400 font-medium">{t('Create New Playlist')}</span>
                 </button>
               )}
 
               {/* Playlist list */}
               {playlists.length === 0 && !showCreate ? (
                 <p className="text-center text-slate-400 py-4">
-                  No playlists yet
+                  {t('No playlists yet')}
                 </p>
               ) : (
                 playlists.map((playlist) => {
@@ -241,7 +243,7 @@ export function PlaylistPicker({ tracks, onClose, onAdded }: PlaylistPickerProps
                       <div className="flex-1 min-w-0">
                         <p className="text-sm text-white truncate">{playlist.name}</p>
                         <p className="text-xs text-slate-400">
-                          {playlist.trackCount} tracks{isOffline && ' • Offline'}
+                          {t('{count} tracks', { count: playlist.trackCount })}{isOffline && ` • ${t('Offline')}`}
                         </p>
                       </div>
                       {addingTo === playlist.id ? (

@@ -14,6 +14,9 @@ import { EQ_BAND_LABELS, EQ_PRESETS } from '@/utils/eqPresets';
 import { useUiStore } from '@/stores/uiStore';
 import { formatFileSize } from '@/utils/format';
 import { APP_CONFIG } from '@/config/app';
+import { confirmDialog } from '@/components/common/confirm';
+import { t } from '@/i18n';
+import { ExtraSettings } from '@/components/settings/ExtraSettings';
 
 export function SettingsPage() {
   const navigate = useNavigate();
@@ -54,13 +57,13 @@ export function SettingsPage() {
       const info = await streamApi.getTranscodeInfo();
       if (!info.ffmpegAvailable) {
         setTranscodeUnavailable(true);
-        addToast('FFmpeg is not installed on the server. Downloads will keep the original format.', 'warning');
+        addToast(t('FFmpeg is not installed on the server. Downloads will keep the original format.'), 'warning');
         setDownloadFormat('original');
         return;
       }
     } catch {
       setTranscodeUnavailable(true);
-      addToast('The server does not support transcoding. Update TelegramFileManager.', 'warning');
+      addToast(t('The server does not support transcoding. Update TelegramFileManager.'), 'warning');
       setDownloadFormat('original');
       return;
     }
@@ -108,12 +111,12 @@ export function SettingsPage() {
 
   const loadCacheSize = async () => {
     const tracks = await db.cachedTracks.toArray();
-    setCacheSize(tracks.reduce((acc, t) => acc + t.fileSize, 0));
+    setCacheSize(tracks.reduce((acc, track) => acc + track.fileSize, 0));
   };
 
   const handleSave = async () => {
     if (!host || !apiKey) {
-      addToast('Please fill in all required fields', 'warning');
+      addToast(t('Please fill in all required fields'), 'warning');
       return;
     }
 
@@ -121,7 +124,7 @@ export function SettingsPage() {
     try {
       const success = await apiClient.testConnection(host, parseInt(port), apiKey, useHttps);
       if (!success) {
-        addToast('Connection failed. Check your settings.', 'error');
+        addToast(t('Connection failed. Check your settings.'), 'error');
         return;
       }
 
@@ -133,9 +136,9 @@ export function SettingsPage() {
       });
 
       apiClient.clearCache();
-      addToast('Settings saved!', 'success');
+      addToast(t('Settings saved!'), 'success');
     } catch {
-      addToast('Failed to save settings', 'error');
+      addToast(t('Failed to save settings'), 'error');
     } finally {
       setSaving(false);
     }
@@ -148,25 +151,35 @@ export function SettingsPage() {
     // Apply the new limit immediately (only auto-cached tracks are evicted)
     const removed = await cacheService.enforceCacheLimit(sizeMB * 1024 * 1024);
     if (removed > 0) {
-      addToast(`Removed ${removed} auto-cached tracks to fit the new limit`, 'info');
+      addToast(t('Removed {count} auto-cached tracks to fit the new limit', { count: removed }), 'info');
       loadCacheSize();
     }
   };
 
   const handleClearCache = async () => {
-    if (!confirm('Clear all cached tracks? This cannot be undone.')) return;
+    if (!(await confirmDialog({
+      title: t('Delete all downloads?'),
+      message: t('Every track stored on this device will be removed. This cannot be undone.'),
+      confirmLabel: t('Delete'),
+      danger: true
+    }))) return;
 
     try {
       await db.cachedTracks.clear();
       setCacheSize(0);
-      addToast('Cache cleared', 'success');
+      addToast(t('Cache cleared'), 'success');
     } catch {
-      addToast('Failed to clear cache', 'error');
+      addToast(t('Failed to clear cache'), 'error');
     }
   };
 
   const handleLogout = async () => {
-    if (!confirm('Disconnect from server? All cached data will be kept.')) return;
+    if (!(await confirmDialog({
+      title: t('Disconnect from the server?'),
+      message: t('Downloads and cached data are kept on this device.'),
+      confirmLabel: t('Disconnect'),
+      danger: true
+    }))) return;
 
     try {
       await clearServerConfig();
@@ -174,39 +187,39 @@ export function SettingsPage() {
       apiClient.clearCache();
       navigate('/setup');
     } catch {
-      addToast('Failed to disconnect', 'error');
+      addToast(t('Failed to disconnect'), 'error');
     }
   };
 
   return (
     <div className="flex flex-col min-h-screen lg:min-h-0">
-      <Header title="Settings" />
+      <Header title={t('Settings')} />
 
       <div className="flex-1 overflow-y-auto">
         {/* Server Configuration */}
         <section className="p-4">
           <h2 className="text-sm font-medium text-slate-400 uppercase mb-4">
-            Server Connection
+            {t('Server Connection')}
           </h2>
           <div className="space-y-4">
             <Input
-              label="Server Host"
+              label={t('Server Host')}
               placeholder="192.168.1.100"
               value={host}
               onChange={(e) => setHost(e.target.value)}
               icon={<Server className="w-4 h-4" />}
             />
             <Input
-              label="Port"
+              label={t('Port')}
               type="number"
               placeholder="5000"
               value={port}
               onChange={(e) => setPort(e.target.value)}
             />
             <Input
-              label="API Key"
+              label={t('API Key')}
               type="password"
-              placeholder="Enter API key"
+              placeholder={t('Enter API key')}
               value={apiKey}
               onChange={(e) => setApiKey(e.target.value)}
               icon={<Key className="w-4 h-4" />}
@@ -220,7 +233,7 @@ export function SettingsPage() {
                 ) : (
                   <Unlock className="w-5 h-5 text-slate-400" />
                 )}
-                <span className="text-sm text-white">Use HTTPS</span>
+                <span className="text-sm text-white">{t('Use HTTPS')}</span>
               </div>
               <button
                 onClick={() => setUseHttps(!useHttps)}
@@ -242,7 +255,7 @@ export function SettingsPage() {
               loading={saving}
               className="w-full"
             >
-              Save Connection Settings
+              {t('Save Connection Settings')}
             </Button>
           </div>
         </section>
@@ -252,19 +265,19 @@ export function SettingsPage() {
         {/* Storage */}
         <section className="p-4">
           <h2 className="text-sm font-medium text-slate-400 uppercase mb-4">
-            Storage
+            {t('Storage')}
           </h2>
           <div className="space-y-3">
             <div className="flex items-center justify-between p-4 bg-slate-800 rounded-lg">
               <div className="flex items-center gap-3">
                 <HardDrive className="w-5 h-5 text-slate-400" />
                 <div>
-                  <p className="text-sm text-white">Cached Audio</p>
+                  <p className="text-sm text-white">{t('Cached Audio')}</p>
                   <p className="text-xs text-slate-400">{formatFileSize(cacheSize)}</p>
                 </div>
               </div>
               <Button variant="ghost" size="sm" onClick={handleClearCache}>
-                Clear
+                {t('Clear')}
               </Button>
             </div>
 
@@ -273,9 +286,9 @@ export function SettingsPage() {
               <div className="flex items-center gap-3">
                 <Zap className={`w-5 h-5 ${autoCacheEnabled ? 'text-emerald-400' : 'text-slate-400'}`} />
                 <div>
-                  <p className="text-sm text-white">Cache songs while streaming</p>
+                  <p className="text-sm text-white">{t('Cache songs while streaming')}</p>
                   <p className="text-xs text-slate-400">
-                    Reuse downloaded audio when seeking or replaying
+                    {t('Reuse downloaded audio when seeking or replaying')}
                   </p>
                 </div>
               </div>
@@ -296,9 +309,9 @@ export function SettingsPage() {
             {/* Cache size limit */}
             <div className="flex items-center justify-between p-4 bg-slate-800 rounded-lg">
               <div>
-                <p className="text-sm text-white">Cache size limit</p>
+                <p className="text-sm text-white">{t('Cache size limit')}</p>
                 <p className="text-xs text-slate-400">
-                  Oldest auto-cached songs are removed first. Downloads are kept.
+                  {t('Oldest auto-cached songs are removed first. Downloads are kept.')}
                 </p>
               </div>
               <select
@@ -311,7 +324,7 @@ export function SettingsPage() {
                 <option value={2048}>2 GB</option>
                 <option value={5120}>5 GB</option>
                 <option value={10240}>10 GB</option>
-                <option value={0}>Unlimited</option>
+                <option value={0}>{t('Unlimited')}</option>
               </select>
             </div>
 
@@ -319,9 +332,9 @@ export function SettingsPage() {
             <div className="p-4 bg-slate-800 rounded-lg">
               <div className="flex items-center justify-between">
                 <div>
-                  <p className="text-sm text-white">Download format</p>
+                  <p className="text-sm text-white">{t('Download format')}</p>
                   <p className="text-xs text-slate-400">
-                    Convert offline downloads (e.g. FLAC) to save space
+                    {t('Convert offline downloads (e.g. FLAC) to save space')}
                   </p>
                 </div>
                 <div className="flex gap-2 shrink-0">
@@ -330,7 +343,7 @@ export function SettingsPage() {
                     onChange={handleDownloadFormatChange}
                     className="bg-slate-700 text-white text-sm rounded-lg px-3 py-2 border border-slate-600"
                   >
-                    <option value="original">Original</option>
+                    <option value="original">{t('Original')}</option>
                     <option value="mp3">MP3</option>
                     <option value="aac">AAC</option>
                   </select>
@@ -349,8 +362,7 @@ export function SettingsPage() {
               </div>
               {transcodeUnavailable && (
                 <p className="mt-2 text-xs text-yellow-400">
-                  FFmpeg is not available on the server, so transcoding is disabled.
-                  Install FFmpeg on the TelegramFileManager host to enable it.
+                  {t('FFmpeg is not available on the server, so transcoding is disabled. Install FFmpeg on the TelegramFileManager host to enable it.')}
                 </p>
               )}
             </div>
@@ -362,14 +374,14 @@ export function SettingsPage() {
         {/* Player */}
         <section className="p-4">
           <h2 className="text-sm font-medium text-slate-400 uppercase mb-4">
-            Player
+            {t('Player')}
           </h2>
           <div className="space-y-3">
             <div className="flex items-center justify-between p-4 bg-slate-800 rounded-lg">
               <div>
-                <p className="text-sm text-white">Skip buttons</p>
+                <p className="text-sm text-white">{t('Skip buttons')}</p>
                 <p className="text-xs text-slate-400">
-                  Jump backward/forward buttons in the expanded player
+                  {t('Jump backward/forward buttons in the expanded player')}
                 </p>
               </div>
               <button
@@ -389,26 +401,26 @@ export function SettingsPage() {
             {skipButtonsEnabled && (
               <div className="flex items-center gap-3 p-4 bg-slate-800 rounded-lg">
                 <div className="flex-1">
-                  <p className="text-xs text-slate-400 mb-1">Backward</p>
+                  <p className="text-xs text-slate-400 mb-1">{t('Backward')}</p>
                   <select
                     value={skipBackSeconds}
                     onChange={(e) => setSkipBackSeconds(parseInt(e.target.value))}
                     className="w-full bg-slate-700 text-white text-sm rounded-lg px-3 py-2 border border-slate-600"
                   >
                     {SKIP_OPTIONS.map((s) => (
-                      <option key={s} value={s}>{s} seconds</option>
+                      <option key={s} value={s}>{t('{count} seconds', { count: s })}</option>
                     ))}
                   </select>
                 </div>
                 <div className="flex-1">
-                  <p className="text-xs text-slate-400 mb-1">Forward</p>
+                  <p className="text-xs text-slate-400 mb-1">{t('Forward')}</p>
                   <select
                     value={skipForwardSeconds}
                     onChange={(e) => setSkipForwardSeconds(parseInt(e.target.value))}
                     className="w-full bg-slate-700 text-white text-sm rounded-lg px-3 py-2 border border-slate-600"
                   >
                     {SKIP_OPTIONS.map((s) => (
-                      <option key={s} value={s}>{s} seconds</option>
+                      <option key={s} value={s}>{t('{count} seconds', { count: s })}</option>
                     ))}
                   </select>
                 </div>
@@ -419,10 +431,12 @@ export function SettingsPage() {
 
         <div className="h-px bg-slate-700 mx-4" />
 
+        <ExtraSettings />
+
         {/* Sound Enhancement */}
         <section className="p-4">
           <h2 className="text-sm font-medium text-slate-400 uppercase mb-4">
-            Sound
+            {t('Sound')}
           </h2>
           <div className="space-y-3">
             {/* Master toggle */}
@@ -430,9 +444,9 @@ export function SettingsPage() {
               <div className="flex items-center gap-3">
                 <Music2 className={`w-5 h-5 ${sound.enabled ? 'text-emerald-400' : 'text-slate-400'}`} />
                 <div>
-                  <p className="text-sm text-white">Sound enhancement</p>
+                  <p className="text-sm text-white">{t('Sound enhancement')}</p>
                   <p className="text-xs text-slate-400">
-                    Equalizer, bass boost, 3D stereo and volume leveling
+                    {t('Equalizer, bass boost, 3D stereo and volume leveling')}
                   </p>
                 </div>
               </div>
@@ -454,7 +468,7 @@ export function SettingsPage() {
               <>
                 {/* EQ presets */}
                 <div className="p-4 bg-slate-800 rounded-lg">
-                  <p className="text-xs text-slate-400 mb-2">Equalizer preset</p>
+                  <p className="text-xs text-slate-400 mb-2">{t('Equalizer preset')}</p>
                   <div className="flex flex-wrap gap-2">
                     {EQ_PRESETS.map((preset) => (
                       <button
@@ -466,12 +480,12 @@ export function SettingsPage() {
                             : 'bg-slate-700 text-slate-300'
                         }`}
                       >
-                        {preset.label}
+                        {t(preset.label)}
                       </button>
                     ))}
                     {sound.preset === 'custom' && (
                       <span className="px-3 py-1 text-sm rounded-full bg-emerald-500/20 text-emerald-400">
-                        Custom
+                        {t('Custom')}
                       </span>
                     )}
                   </div>
@@ -503,7 +517,7 @@ export function SettingsPage() {
                 {/* Bass boost */}
                 <div className="p-4 bg-slate-800 rounded-lg">
                   <div className="flex items-center justify-between mb-2">
-                    <p className="text-sm text-white">Bass boost</p>
+                    <p className="text-sm text-white">{t('Bass boost')}</p>
                     <span className="text-xs text-slate-400 tabular-nums">+{sound.bassBoost} dB</span>
                   </div>
                   <input
@@ -520,7 +534,7 @@ export function SettingsPage() {
                 {/* Stereo width */}
                 <div className="p-4 bg-slate-800 rounded-lg">
                   <div className="flex items-center justify-between mb-2">
-                    <p className="text-sm text-white">3D stereo width</p>
+                    <p className="text-sm text-white">{t('3D stereo width')}</p>
                     <span className="text-xs text-slate-400 tabular-nums">+{sound.stereoWidth}%</span>
                   </div>
                   <input
@@ -537,9 +551,9 @@ export function SettingsPage() {
                 {/* Loudness */}
                 <div className="flex items-center justify-between p-4 bg-slate-800 rounded-lg">
                   <div>
-                    <p className="text-sm text-white">Volume leveling</p>
+                    <p className="text-sm text-white">{t('Volume leveling')}</p>
                     <p className="text-xs text-slate-400">
-                      Evens out loudness differences between tracks
+                      {t('Evens out loudness differences between tracks')}
                     </p>
                   </div>
                   <button
@@ -565,14 +579,14 @@ export function SettingsPage() {
         {/* About */}
         <section className="p-4">
           <h2 className="text-sm font-medium text-slate-400 uppercase mb-4">
-            About
+            {t('About')}
           </h2>
           <div className="flex items-center gap-3 p-4 bg-slate-800 rounded-lg">
             <Info className="w-5 h-5 text-slate-400" />
             <div>
               <p className="text-sm text-white">TFM Audio PWA</p>
-              <p className="text-xs text-slate-400">Version {APP_CONFIG.version}</p>
-              <p className="text-xs text-slate-500">Build: {APP_CONFIG.buildTimestamp}</p>
+              <p className="text-xs text-slate-400">{t('Version {version}', { version: APP_CONFIG.version })}</p>
+              <p className="text-xs text-slate-500">{t('Build: {build}', { build: APP_CONFIG.buildTimestamp })}</p>
             </div>
           </div>
         </section>
@@ -582,7 +596,7 @@ export function SettingsPage() {
         {/* Danger Zone */}
         <section className="p-4">
           <h2 className="text-sm font-medium text-red-400 uppercase mb-4">
-            Danger Zone
+            {t('Danger Zone')}
           </h2>
           <Button
             variant="danger"
@@ -590,7 +604,7 @@ export function SettingsPage() {
             onClick={handleLogout}
             className="w-full"
           >
-            Disconnect from Server
+            {t('Disconnect from Server')}
           </Button>
         </section>
       </div>

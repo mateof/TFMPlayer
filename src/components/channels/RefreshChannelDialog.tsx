@@ -4,6 +4,7 @@ import { channelRefreshService, loadRefreshOptions } from '@/services/channelRef
 import { useUiStore } from '@/stores/uiStore';
 import { useDialog } from '@/hooks/useDialog';
 import type { ChannelRefreshOptions, ChannelStats } from '@/types/models';
+import { t } from '@/i18n';
 
 interface RefreshChannelDialogProps {
   channelId: string;
@@ -23,9 +24,9 @@ export function RefreshChannelDialog({ channelId, channelName, stats, onClose }:
   const blocked = stats?.canRefresh === false;
 
   const kinds: { key: OptionalKind; label: string; icon: React.ReactNode; count?: number }[] = [
-    { key: 'includeVideo', label: 'Videos', icon: <Film className="w-5 h-5" />, count: stats?.videoCount },
-    { key: 'includeDocuments', label: 'Documents', icon: <FileText className="w-5 h-5" />, count: stats?.documentCount },
-    { key: 'includePhotos', label: 'Photos', icon: <Image className="w-5 h-5" />, count: stats?.photoCount }
+    { key: 'includeVideo', label: t('Videos'), icon: <Film className="w-5 h-5" />, count: stats?.videoCount },
+    { key: 'includeDocuments', label: t('Documents'), icon: <FileText className="w-5 h-5" />, count: stats?.documentCount },
+    { key: 'includePhotos', label: t('Photos'), icon: <Image className="w-5 h-5" />, count: stats?.photoCount }
   ];
 
   const toggle = (key: keyof ChannelRefreshOptions) =>
@@ -35,15 +36,15 @@ export function RefreshChannelDialog({ channelId, channelName, stats, onClose }:
     setSubmitting(true);
     try {
       await channelRefreshService.start(channelId, channelName, options);
-      addToast('Channel refresh started', 'info');
+      addToast(t('Channel refresh started'), 'info');
       onClose();
     } catch (error) {
       console.error('Channel refresh failed to start:', error);
       const status = (error as { response?: { status?: number } }).response?.status;
       addToast(
         status === 404
-          ? 'This server does not support refreshing channels (update TelegramFileManager)'
-          : 'Could not start the refresh',
+          ? t('This server does not support refreshing channels (update TelegramFileManager)')
+          : t('Could not start the refresh'),
         'error'
       );
     } finally {
@@ -58,39 +59,37 @@ export function RefreshChannelDialog({ channelId, channelName, stats, onClose }:
         <div className="flex items-center gap-3 px-4 py-3 border-b border-slate-700">
           <RefreshCw className="w-5 h-5 text-emerald-400" />
           <div className="flex-1 min-w-0">
-            <h2 id="refresh-channel-title" className="text-white font-semibold">Refresh channel</h2>
+            <h2 id="refresh-channel-title" className="text-white font-semibold">{t('Refresh channel')}</h2>
             <p className="text-xs text-slate-400 truncate">{channelName}</p>
           </div>
-          <button onClick={onClose} className="p-2 text-slate-400 hover:text-white" aria-label="Close">
+          <button onClick={onClose} className="p-2 text-slate-400 hover:text-white" aria-label={t('Close')}>
             <X className="w-5 h-5" />
           </button>
         </div>
 
         <div className="p-4 space-y-4">
           <p className="text-sm text-slate-300">
-            TelegramFileManager will scan the channel and index the files it does not know yet.
-            It runs on the server and can take a few minutes on large channels.
+            {t('TelegramFileManager will scan the channel and index the files it does not know yet. It runs on the server and can take a few minutes on large channels.')}
           </p>
 
           {blocked && (
             <div className="flex gap-2 p-3 rounded-lg bg-amber-500/10 text-amber-300 text-sm">
               <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
               <span>
-                This is one of your own channels. Enable "refresh own channels" in the
-                TelegramFileManager settings to scan it.
+                {t('This is one of your own channels. Enable "refresh own channels" in the TelegramFileManager settings to scan it.')}
               </span>
             </div>
           )}
 
           <div className="space-y-2">
-            <p className="text-xs text-slate-400 uppercase tracking-wide">File types to fetch</p>
+            <p className="text-xs text-slate-400 uppercase tracking-wide">{t('File types to fetch')}</p>
 
             {/* Audio is the reason this app exists: always refreshed */}
             <div className="flex items-center gap-3 p-3 rounded-lg bg-slate-700/40">
               <span className="text-emerald-400"><Music className="w-5 h-5" /></span>
-              <span className="flex-1 text-sm text-white">Audio</span>
-              {stats && <span className="text-xs text-slate-400 tabular-nums">{stats.audioCount} indexed</span>}
-              <span className="text-xs text-emerald-400">Always</span>
+              <span className="flex-1 text-sm text-white">{t('Audio')}</span>
+              {stats && <span className="text-xs text-slate-400 tabular-nums">{t('{count} indexed', { count: stats.audioCount })}</span>}
+              <span className="text-xs text-emerald-400">{t('Always')}</span>
             </div>
 
             {kinds.map((kind) => (
@@ -101,7 +100,7 @@ export function RefreshChannelDialog({ channelId, channelName, stats, onClose }:
                 <span className={options[kind.key] ? 'text-emerald-400' : 'text-slate-400'}>{kind.icon}</span>
                 <span className="flex-1 text-sm text-white">{kind.label}</span>
                 {kind.count !== undefined && (
-                  <span className="text-xs text-slate-400 tabular-nums">{kind.count} indexed</span>
+                  <span className="text-xs text-slate-400 tabular-nums">{t('{count} indexed', { count: kind.count })}</span>
                 )}
                 <input
                   type="checkbox"
@@ -121,9 +120,9 @@ export function RefreshChannelDialog({ channelId, channelName, stats, onClose }:
               className="w-5 h-5 mt-0.5 accent-emerald-500"
             />
             <span className="text-sm">
-              <span className="text-white">Full rescan</span>
+              <span className="text-white">{t('Full rescan')}</span>
               <span className="block text-xs text-slate-400">
-                Walk the whole channel again even if a previous scan completed. Slower.
+                {t('Walk the whole channel again even if a previous scan completed. Slower.')}
               </span>
             </span>
           </label>
@@ -134,7 +133,7 @@ export function RefreshChannelDialog({ channelId, channelName, stats, onClose }:
             onClick={onClose}
             className="flex-1 py-2.5 rounded-lg bg-slate-700 text-slate-200 text-sm font-medium hover:bg-slate-600"
           >
-            Cancel
+            {t('Cancel')}
           </button>
           <button
             onClick={handleSubmit}
@@ -142,7 +141,7 @@ export function RefreshChannelDialog({ channelId, channelName, stats, onClose }:
             className="flex-1 py-2.5 rounded-lg bg-emerald-500 text-white text-sm font-medium hover:bg-emerald-600 disabled:opacity-50 flex items-center justify-center gap-2"
           >
             {submitting ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
-            Refresh
+            {t('Refresh')}
           </button>
         </div>
       </div>

@@ -8,6 +8,7 @@ import { LoadingScreen } from '@/components/common/Spinner';
 import { useUiStore } from '@/stores/uiStore';
 import { useChannelsQuery, useFavoriteChannelsQuery, useChannelFoldersQuery, useToggleFavoriteMutation } from '@/hooks/queries';
 import type { Channel, ChannelFolder } from '@/types/models';
+import { t } from '@/i18n';
 
 type Tab = 'all' | 'favorites' | 'folders' | 'local';
 
@@ -52,7 +53,7 @@ export function ChannelsPage() {
   // Only complain when there is nothing to show at all
   useEffect(() => {
     if (channelsQuery.isError && !channelsQuery.data) {
-      addToast('Failed to load channels', 'error');
+      addToast(t('Failed to load channels'), 'error');
     }
   }, [channelsQuery.isError, channelsQuery.data, addToast]);
 
@@ -85,7 +86,7 @@ export function ChannelsPage() {
   const toggleFavorite = (channel: Channel, e: React.MouseEvent) => {
     e.stopPropagation();
     toggleFavoriteMutation.mutate(channel, {
-      onError: () => addToast('Failed to update favorite', 'error')
+      onError: () => addToast(t('Failed to update favorite'), 'error')
     });
   };
 
@@ -98,10 +99,10 @@ export function ChannelsPage() {
   );
 
   const tabs: { key: Tab; label: string }[] = [
-    { key: 'all', label: 'All' },
-    { key: 'favorites', label: 'Favorites' },
-    { key: 'folders', label: 'Folders' },
-    { key: 'local', label: 'Local' }
+    { key: 'all', label: t('All') },
+    { key: 'favorites', label: t('Favorites') },
+    { key: 'folders', label: t('Folders') },
+    { key: 'local', label: t('Local') }
   ];
 
   // Search button for header when scrolled
@@ -118,7 +119,7 @@ export function ChannelsPage() {
 
   return (
     <div className="flex flex-col h-screen lg:h-full overflow-hidden">
-      <Header title="Channels" actions={searchAction} />
+      <Header title={t('Channels')} actions={searchAction} />
 
       {/* Sticky header with search and tabs */}
       <div className="sticky top-0 z-10 bg-slate-900">
@@ -128,7 +129,7 @@ export function ChannelsPage() {
             <div className="flex-1">
               <Input
                 ref={searchInputRef}
-                placeholder="Search channels..."
+                placeholder={t('Search channels...')}
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 icon={<Search className="w-4 h-4" />}
@@ -151,7 +152,7 @@ export function ChannelsPage() {
         {/* Active search indicator when scrolled and search collapsed */}
         {isScrolled && !searchExpanded && searchQuery && (
           <div className="px-4 py-1 text-sm text-emerald-400">
-            Searching: "{searchQuery}"
+            {t('Searching: "{query}"', { query: searchQuery })}
           </div>
         )}
 
@@ -176,7 +177,7 @@ export function ChannelsPage() {
       {/* Content */}
       <div ref={scrollContainerRef} className="flex-1 overflow-y-auto">
         {loading ? (
-          <LoadingScreen message="Loading channels..." />
+          <LoadingScreen message={t('Loading channels...')} />
         ) : activeTab === 'all' ? (
           <ChannelList
             channels={filteredChannels}
@@ -188,7 +189,7 @@ export function ChannelsPage() {
             channels={filteredFavorites}
             onToggleFavorite={toggleFavorite}
             onSelect={(ch) => navigate(`/channels/${ch.id}`)}
-            emptyMessage="No favorite channels yet"
+            emptyMessage={t('No favorite channels yet')}
           />
         ) : activeTab === 'folders' ? (
           <FoldersList
@@ -216,7 +217,7 @@ function ChannelList({ channels, onToggleFavorite, onSelect, emptyMessage }: Cha
     return (
       <div className="flex flex-col items-center justify-center py-12 text-slate-400">
         <Radio className="w-12 h-12 mb-4 opacity-50" />
-        <p>{emptyMessage || 'No channels found'}</p>
+        <p>{emptyMessage || t('No channels found')}</p>
       </div>
     );
   }
@@ -240,17 +241,17 @@ function ChannelList({ channels, onToggleFavorite, onSelect, emptyMessage }: Cha
           <div className="flex-1 min-w-0">
             <p className="font-medium text-white truncate" title={channel.name}>{channel.name}</p>
             <p className="text-sm text-slate-400">
-              {channel.fileCount} files
+              {t('{count} files', { count: channel.fileCount })}
               <span className="hidden lg:inline">
                 {' · '}<span className="capitalize">{channel.type}</span>
-                {channel.isOwner && ' · owner'}
+                {channel.isOwner && ` · ${t('owner')}`}
               </span>
             </p>
           </div>
           <button
             onClick={(e) => onToggleFavorite(channel, e)}
             className="p-2 touch-manipulation"
-            aria-label={channel.isFavorite ? 'Remove from favorites' : 'Add to favorites'}
+            aria-label={channel.isFavorite ? t('Remove from favorites') : t('Add to favorites')}
           >
             <Star
               className={`w-5 h-5 ${
@@ -288,9 +289,9 @@ function LocalFilesEntry({ onNavigate }: LocalFilesEntryProps) {
           <HardDrive className="w-7 h-7 text-emerald-400" />
         </div>
         <div className="flex-1 text-left">
-          <p className="font-medium text-white text-lg">Local Files</p>
+          <p className="font-medium text-white text-lg">{t('Local Files')}</p>
           <p className="text-sm text-slate-400">
-            Browse files from server's local storage
+            {t("Browse files from server's local storage")}
           </p>
         </div>
         <ChevronRight className="w-6 h-6 text-slate-500" />
@@ -329,7 +330,7 @@ function FoldersList({ folders, ungroupedChannels, onSelectChannel }: FoldersLis
             <div className="flex-1 text-left">
               <p className="font-medium text-white">{folder.title}</p>
               <p className="text-sm text-slate-400">
-                {folder.channelCount} channels
+                {t('{count} channels', { count: folder.channelCount })}
               </p>
             </div>
             <ChevronRight
@@ -361,7 +362,7 @@ function FoldersList({ folders, ungroupedChannels, onSelectChannel }: FoldersLis
       {ungroupedChannels.length > 0 && (
         <>
           <div className="px-4 py-2 bg-slate-800">
-            <span className="text-xs text-slate-400 uppercase">Ungrouped</span>
+            <span className="text-xs text-slate-400 uppercase">{t('Ungrouped')}</span>
           </div>
           {ungroupedChannels.map((channel) => (
             <button

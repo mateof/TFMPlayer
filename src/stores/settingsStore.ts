@@ -33,6 +33,9 @@ interface SettingsState {
   skipButtonsEnabled: boolean; // Show ±N seconds skip buttons in the player
   skipBackSeconds: number;
   skipForwardSeconds: number;
+  crossfadeSeconds: number; // 0 = gapless changeover without fade
+  autoCleanDays: number; // Remove downloads not played for N days (0 = never)
+  debugLogging: boolean; // Verbose console output (support/debugging)
 
   setConfigured: (configured: boolean) => void;
   setServerInfo: (host: string, port: number, useHttps: boolean) => void;
@@ -44,6 +47,9 @@ interface SettingsState {
   setSkipButtonsEnabled: (enabled: boolean) => void;
   setSkipBackSeconds: (seconds: number) => void;
   setSkipForwardSeconds: (seconds: number) => void;
+  setCrossfadeSeconds: (seconds: number) => void;
+  setAutoCleanDays: (days: number) => void;
+  setDebugLogging: (enabled: boolean) => void;
   clearSettings: () => void;
 }
 
@@ -62,6 +68,9 @@ export const useSettingsStore = create<SettingsState>()(
       skipButtonsEnabled: false,
       skipBackSeconds: 10,
       skipForwardSeconds: 30,
+      crossfadeSeconds: 0,
+      autoCleanDays: 0,
+      debugLogging: false,
 
       setConfigured: (configured) => set({ isConfigured: configured }),
       setServerInfo: (host, port, useHttps) =>
@@ -74,6 +83,9 @@ export const useSettingsStore = create<SettingsState>()(
       setSkipButtonsEnabled: (enabled) => set({ skipButtonsEnabled: enabled }),
       setSkipBackSeconds: (seconds) => set({ skipBackSeconds: seconds }),
       setSkipForwardSeconds: (seconds) => set({ skipForwardSeconds: seconds }),
+      setCrossfadeSeconds: (seconds) => set({ crossfadeSeconds: Math.max(0, Math.min(12, seconds)) }),
+      setAutoCleanDays: (days) => set({ autoCleanDays: Math.max(0, days) }),
+      setDebugLogging: (enabled) => set({ debugLogging: enabled }),
       clearSettings: () =>
         set({ isConfigured: false, serverHost: '', serverPort: 5000, useHttps: false })
     }),

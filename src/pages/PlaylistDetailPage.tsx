@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef, useLayoutEffect } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
+import { useQueryClient } from '@tanstack/react-query';
 import { useParams } from 'react-router-dom';
 import { Play, Shuffle, Download, Music, Trash2, Check, CloudOff, Cloud, WifiOff, GripVertical, ChevronUp } from 'lucide-react';
 import { Header } from '@/components/layout/Header';
@@ -18,13 +19,17 @@ import {
   saveOfflinePlaylist,
   deleteOfflinePlaylist,
   getApiCache,
-  setApiCache,
   db,
   type OfflinePlaylistEntity
 } from '@/db/database';
 import type { PlaylistDetail, Track } from '@/types/models';
+import { confirmDialog } from '@/components/common/confirm';
+import { t } from '@/i18n';
+
+const detailKey = (id: string) => ['playlists', id, 'detail'] as const;
 
 export function PlaylistDetailPage() {
+  const queryClient = useQueryClient();
   const { id } = useParams<{ id: string }>();
   const { addToast } = useUiStore();
   const { play, playNext, currentTrack, isPlaying } = useAudioPlayer();
@@ -102,16 +107,16 @@ export function PlaylistDetailPage() {
     if (!playlist?.tracks.length) return;
 
     // Check if any completed download belongs to this playlist
-    const completedInPlaylist = playlist.tracks.filter(t => completedDownloads.has(t.fileId));
+    const completedInPlaylist = playlist.tracks.filter(tr => completedDownloads.has(tr.fileId));
     if (completedInPlaylist.length > 0) {
       // Immediately add to cached set
       setCachedTrackIds(prev => {
         const newSet = new Set(prev);
-        completedInPlaylist.forEach(t => newSet.add(t.fileId));
+        completedInPlaylist.forEach(tr => newSet.add(tr.fileId));
         return newSet;
       });
       // Clear the completed flags
-      completedInPlaylist.forEach(t => clearCompleted(t.fileId));
+      completedInPlaylist.forEach(tr => clearCompleted(tr.fileId));
       // Also update full cache status (for cover art, duration, etc.)
       updateCacheStatus(playlist.tracks);
     }
@@ -123,7 +128,7 @@ export function PlaylistDetailPage() {
 
     const interval = setInterval(async () => {
       // Only refresh if there are active downloads for tracks in this playlist
-      const hasActiveDownloads = playlist.tracks.some(t => activeDownloads.has(t.fileId));
+      const hasActiveDownloads = playlist.tracks.some(tr => activeDownloads.has(tr.fileId));
       if (hasActiveDownloads) {
         await updateCacheStatus(playlist.tracks);
       }
@@ -153,9 +158,12 @@ export function PlaylistDetailPage() {
     const offlineData = await getOfflinePlaylist(id!);
     setIsOffline(!!offlineData);
 
+    // Offline copy first, then the persisted react-query cache, then the
+    // cache written by versions before react-query
     const cachedDetail = offlineData
       ? offlineToDetail(offlineData)
-      : await getApiCache<PlaylistDetail>(`playlist-detail:${id}`);
+      : queryClient.getQueryData<PlaylistDetail>(detailKey(id!))
+        ?? await getApiCache<PlaylistDetail>(`playlist-detail:${id}`);
 
     const renderedFromCache = !!cachedDetail;
     if (cachedDetail) {
@@ -176,31 +184,35 @@ export function PlaylistDetailPage() {
   ) => {
     setSyncing(true);
     try {
-      const data = await playlistsApi.getById(id!);
+      // Through react-query: shared and persisted cache, one request even if
+      // several screens ask at once
+      const data = await queryClient.fetchQuery({
+        queryKey: detailKey(id!),
+        queryFn: () => playlistsApi.getById(id!),
+        staleTime: 0,
+        meta: { persist: true }
+      });
       setPlaylist(data);
       setIsOfflineMode(false);
-
-      // Keep the last server response available for offline visits
-      setApiCache(`playlist-detail:${id}`, data).catch(() => {});
 
       // Update offline cache if it exists and auto-download new tracks
       if (offlineData) {
         // Find new tracks that weren't in the offline version
         const oldTrackIds = new Set(
-          (JSON.parse(offlineData.tracksJson) as Track[]).map(t => t.fileId)
+          (JSON.parse(offlineData.tracksJson) as Track[]).map(tr => tr.fileId)
         );
-        const newTracks = data.tracks.filter(t => !oldTrackIds.has(t.fileId));
+        const newTracks = data.tracks.filter(tr => !oldTrackIds.has(tr.fileId));
 
         // Save updated playlist
         await saveOfflinePlaylist(id!, data.name, data.description, data.tracks);
 
         // Queue new tracks for download (one bulk cache lookup)
         if (newTracks.length > 0) {
-          const cached = await cacheService.getCachedTrackIds(newTracks.map(t => t.fileId));
-          const missing = newTracks.filter(t => !cached.has(t.fileId));
+          const cached = await cacheService.getCachedTrackIds(newTracks.map(tr => tr.fileId));
+          const missing = newTracks.filter(tr => !cached.has(tr.fileId));
           if (missing.length > 0) {
             await downloadManager.addMultipleToQueue(missing);
-            addToast(`${missing.length} new track(s) queued for download`, 'info');
+            addToast(t('{count} new track(s) queued for download', { count: missing.length }), 'info');
           }
         }
       }
@@ -214,7 +226,7 @@ export function PlaylistDetailPage() {
         // Already showing the cached copy: just stay in offline mode
         setIsOfflineMode(true);
       } else {
-        addToast('Failed to load playlist', 'error');
+        addToast(t('Failed to load playlist'), 'error');
       }
     } finally {
       setSyncing(false);
@@ -227,7 +239,7 @@ export function PlaylistDetailPage() {
     const newDurations: Record<string, number> = {};
 
     // Single bulk read instead of one IndexedDB transaction per track
-    const cachedEntries = await db.cachedTracks.bulkGet(tracks.map(t => t.fileId));
+    const cachedEntries = await db.cachedTracks.bulkGet(tracks.map(tr => tr.fileId));
     cachedEntries.forEach((cachedTrack, i) => {
       const track = tracks[i];
       if (cachedTrack?.blob) {
@@ -286,7 +298,7 @@ export function PlaylistDetailPage() {
 
     // Save to server
     try {
-      const trackIds = newTracks.map(t => t.fileId);
+      const trackIds = newTracks.map(tr => tr.fileId);
       await playlistsApi.reorderTracks(id!, trackIds);
 
       // Update offline playlist if saved
@@ -295,7 +307,7 @@ export function PlaylistDetailPage() {
       }
     } catch (error) {
       console.error('Failed to reorder tracks:', error);
-      addToast('Failed to save track order', 'error');
+      addToast(t('Failed to save track order'), 'error');
       // Revert on error
       loadPlaylist();
     }
@@ -327,14 +339,20 @@ export function PlaylistDetailPage() {
         await deleteOfflinePlaylist(id!);
 
         // Optionally remove cached tracks (ask user)
-        const shouldRemoveTracks = confirm('Also remove downloaded tracks from cache?');
+        const shouldRemoveTracks = await confirmDialog({
+          title: t('Remove the downloaded tracks too?'),
+          message: t('The playlist is no longer kept offline. Its tracks can also be deleted from this device to free space.'),
+          confirmLabel: t('Delete tracks'),
+          cancelLabel: t('Keep them'),
+          danger: true
+        });
         if (shouldRemoveTracks) {
-          await db.cachedTracks.bulkDelete(playlist.tracks.map(t => t.fileId));
+          await db.cachedTracks.bulkDelete(playlist.tracks.map(tr => tr.fileId));
           setCachedTrackIds(new Set());
         }
 
         setIsOffline(false);
-        addToast('Playlist removed from offline', 'success');
+        addToast(t('Playlist removed from offline'), 'success');
       } else {
         // Save for offline
         await saveOfflinePlaylist(id!, playlist.name, playlist.description, playlist.tracks);
@@ -347,14 +365,14 @@ export function PlaylistDetailPage() {
 
         if (tracksToDownload.length > 0) {
           await downloadManager.addMultipleToQueue(tracksToDownload);
-          addToast(`Playlist saved for offline. Downloading ${tracksToDownload.length} tracks...`, 'success');
+          addToast(t('Playlist saved for offline. Downloading {count} tracks...', { count: tracksToDownload.length }), 'success');
         } else {
-          addToast('Playlist saved for offline (all tracks already cached)', 'success');
+          addToast(t('Playlist saved for offline (all tracks already cached)'), 'success');
         }
       }
     } catch (error) {
       console.error('Error toggling offline:', error);
-      addToast('Failed to update offline status', 'error');
+      addToast(t('Failed to update offline status'), 'error');
     } finally {
       setTogglingOffline(false);
     }
@@ -363,7 +381,7 @@ export function PlaylistDetailPage() {
   const handleDownloadTrack = async (track: Track, e: React.MouseEvent) => {
     e.stopPropagation();
     await downloadManager.addToQueue(track);
-    addToast('Added to download queue', 'info');
+    addToast(t('Added to download queue'), 'info');
   };
 
   const handlePlayTrack = (track: Track, index: number) => {
@@ -381,11 +399,11 @@ export function PlaylistDetailPage() {
     newTracks.splice(toIndex, 0, moved);
     setPlaylist({ ...playlist, tracks: newTracks });
     try {
-      await playlistsApi.reorderTracks(id!, newTracks.map(t => t.fileId));
+      await playlistsApi.reorderTracks(id!, newTracks.map(tr => tr.fileId));
       if (isOffline) await saveOfflinePlaylist(id!, playlist.name, playlist.description, newTracks);
     } catch (error) {
       console.error('Failed to reorder tracks:', error);
-      addToast('Failed to save track order', 'error');
+      addToast(t('Failed to save track order'), 'error');
       loadPlaylist();
     }
   };
@@ -420,33 +438,37 @@ export function PlaylistDetailPage() {
 
   const handlePlayNext = (track: Track) => {
     playNext(track);
-    addToast(`"${track.title || track.fileName}" will play next`, 'info');
+    addToast(t('"{name}" will play next', { name: track.title || track.fileName }), 'info');
   };
 
   const handleRemoveTrack = async (track: Track, e: React.MouseEvent) => {
     e.stopPropagation();
 
     if (isOfflineMode) {
-      addToast('Cannot modify playlist while offline', 'error');
+      addToast(t('Cannot modify playlist while offline'), 'error');
       return;
     }
 
-    if (!confirm(`Remove "${track.title || track.fileName}" from playlist?`)) return;
+    if (!(await confirmDialog({
+      message: t('Remove "{name}" from the playlist?', { name: track.title || track.fileName }),
+      confirmLabel: t('Remove'),
+      danger: true
+    }))) return;
 
     try {
       await playlistsApi.removeTrack(id!, track.fileId);
-      addToast('Track removed', 'success');
+      addToast(t('Track removed'), 'success');
       loadPlaylist();
     } catch {
-      addToast('Failed to remove track', 'error');
+      addToast(t('Failed to remove track'), 'error');
     }
   };
 
   if (loading) {
     return (
       <div className="flex flex-col min-h-screen lg:min-h-0">
-        <Header title="Playlist" showBack />
-        <LoadingScreen message="Loading playlist..." />
+        <Header title={t('Playlist')} showBack />
+        <LoadingScreen message={t('Loading playlist...')} />
       </div>
     );
   }
@@ -454,20 +476,20 @@ export function PlaylistDetailPage() {
   if (!playlist) {
     return (
       <div className="flex flex-col min-h-screen lg:min-h-0">
-        <Header title="Playlist" showBack />
+        <Header title={t('Playlist')} showBack />
         <div className="flex-1 flex items-center justify-center">
-          <p className="text-slate-400">Playlist not found</p>
+          <p className="text-slate-400">{t('Playlist not found')}</p>
         </div>
       </div>
     );
   }
 
   // Calculate total duration - use cached durations when available
-  const totalDuration = playlist.tracks.reduce((acc, t) => {
-    const duration = cachedDurations[t.fileId] || t.duration || 0;
+  const totalDuration = playlist.tracks.reduce((acc, tr) => {
+    const duration = cachedDurations[tr.fileId] || tr.duration || 0;
     return acc + duration;
   }, 0);
-  const totalSize = playlist.tracks.reduce((acc, t) => acc + t.fileSize, 0);
+  const totalSize = playlist.tracks.reduce((acc, tr) => acc + tr.fileSize, 0);
   const cachedCount = cachedTrackIds.size;
 
   return (
@@ -486,13 +508,13 @@ export function PlaylistDetailPage() {
               <div className="flex-1 min-w-0">
                 <p className="text-white font-semibold text-sm truncate">{playlist.name}</p>
                 <p className="text-slate-400 text-xs">
-                  {playlist.trackCount} tracks{totalDuration > 0 ? ` • ${formatDuration(totalDuration)}` : ''}
+                  {t('{count} tracks', { count: playlist.trackCount })}{totalDuration > 0 ? ` • ${formatDuration(totalDuration)}` : ''}
                 </p>
               </div>
               <button
                 onClick={handlePlayAll}
                 disabled={!playlist.tracks.length}
-                aria-label="Play all"
+                aria-label={t('Play all')}
                 className="p-2 bg-emerald-500 hover:bg-emerald-600 disabled:opacity-50 disabled:cursor-not-allowed rounded-full transition-colors"
               >
                 <Play className="w-4 h-4 text-white" fill="currentColor" />
@@ -500,7 +522,7 @@ export function PlaylistDetailPage() {
               <button
                 onClick={handleShufflePlay}
                 disabled={!playlist.tracks.length}
-                aria-label="Shuffle play"
+                aria-label={t('Shuffle play')}
                 className="p-2 bg-slate-700 hover:bg-slate-600 disabled:opacity-50 disabled:cursor-not-allowed rounded-full transition-colors"
               >
                 <Shuffle className="w-4 h-4 text-white" />
@@ -508,7 +530,7 @@ export function PlaylistDetailPage() {
               <button
                 onClick={handleToggleOffline}
                 disabled={isOfflineMode || togglingOffline}
-                aria-label={isOffline ? 'Remove offline copy' : 'Save for offline'}
+                aria-label={isOffline ? t('Remove offline copy') : t('Save for offline')}
                 aria-pressed={isOffline}
                 className={`p-2 ${isOffline ? 'bg-emerald-500 hover:bg-emerald-600' : 'bg-slate-700 hover:bg-slate-600'} disabled:opacity-50 disabled:cursor-not-allowed rounded-full transition-colors`}
               >
@@ -522,7 +544,7 @@ export function PlaylistDetailPage() {
         {isOfflineMode && !syncing && (
           <div className="flex items-center gap-2 px-4 py-2 bg-amber-500/20 text-amber-400 text-sm">
             <WifiOff className="w-4 h-4" />
-            <span>Offline mode</span>
+            <span>{t('Offline mode')}</span>
           </div>
         )}
 
@@ -540,12 +562,12 @@ export function PlaylistDetailPage() {
             <div className="flex-1">
               <p className="text-white font-bold text-xl">{playlist.name}</p>
               <p className="text-slate-400 text-sm">
-                {playlist.trackCount} tracks{totalDuration > 0 ? ` • ${formatDuration(totalDuration)}` : ''}
+                {t('{count} tracks', { count: playlist.trackCount })}{totalDuration > 0 ? ` • ${formatDuration(totalDuration)}` : ''}
               </p>
               <p className="text-slate-500 text-xs">{formatFileSize(totalSize)}</p>
               {cachedCount > 0 && (
                 <p className="text-emerald-400 text-xs mt-1">
-                  {cachedCount}/{playlist.tracks.length} cached
+                  {t('{cached}/{total} on device', { cached: cachedCount, total: playlist.tracks.length })}
                 </p>
               )}
             </div>
@@ -560,7 +582,7 @@ export function PlaylistDetailPage() {
               disabled={!playlist.tracks.length}
               className="flex-1"
             >
-              Play All
+              {t('Play All')}
             </Button>
             <Button
               variant="secondary"
@@ -568,7 +590,7 @@ export function PlaylistDetailPage() {
               onClick={handleShufflePlay}
               disabled={!playlist.tracks.length}
             >
-              Shuffle
+              {t('Shuffle')}
             </Button>
           </div>
 
@@ -582,7 +604,7 @@ export function PlaylistDetailPage() {
               disabled={isOfflineMode}
               className="flex-1"
             >
-              {isOffline ? 'Remove Offline' : 'Save Offline'}
+              {isOffline ? t('Remove Offline') : t('Save Offline')}
             </Button>
           </div>
         </div>
@@ -592,14 +614,14 @@ export function PlaylistDetailPage() {
         {playlist.tracks.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-12 text-slate-400">
             <Music className="w-12 h-12 mb-4 opacity-50" />
-            <p>No tracks in this playlist</p>
-            <p className="text-sm mt-2">Add tracks from channels</p>
+            <p>{t('No tracks in this playlist')}</p>
+            <p className="text-sm mt-2">{t('Add tracks from channels')}</p>
           </div>
         ) : (
           <div
             ref={trackListRef}
             role="list"
-            aria-label={`${playlist.tracks.length} tracks. Alt+arrows reorder, Shift+F10 opens options`}
+            aria-label={t('{count} tracks. Alt+arrows reorder, Shift+F10 opens options', { count: playlist.tracks.length })}
             className="relative"
             style={{ height: trackVirtualizer.getTotalSize() }}
           >
@@ -618,7 +640,7 @@ export function PlaylistDetailPage() {
                   role="listitem"
                   tabIndex={0}
                   aria-current={isCurrentTrack ? 'true' : undefined}
-                  aria-label={`${index + 1}. ${track.title || track.fileName}${isCached ? ', on device' : ''}`}
+                  aria-label={`${index + 1}. ${track.title || track.fileName}${isCached ? t(', on device') : ''}`}
                   onKeyDown={(e) => handleTrackKeyDown(track, index, e)}
                   style={{ transform: `translateY(${virtualRow.start - trackVirtualizer.options.scrollMargin}px)` }}
                   draggable={!isOfflineMode}
@@ -657,7 +679,7 @@ export function PlaylistDetailPage() {
                     onClick={() => handlePlayTrack(track, index)}
                   >
                     {coverArt ? (
-                      <img src={coverArt} alt="Cover" className="w-full h-full object-cover rounded-lg" />
+                      <img src={coverArt} alt={t('Cover')} className="w-full h-full object-cover rounded-lg" />
                     ) : (
                       <Music className={`w-5 h-5 ${isCurrentTrack ? 'text-emerald-400' : 'text-slate-400'}`} />
                     )}
@@ -691,8 +713,8 @@ export function PlaylistDetailPage() {
                         onMouseDown={(e) => e.stopPropagation()}
                         onTouchStart={(e) => e.stopPropagation()}
                         className="p-2 text-slate-500 hover:text-emerald-400 transition-colors"
-                        title="Download"
-                        aria-label={`Download ${track.title || track.fileName}`}
+                        title={t('Download')}
+                        aria-label={t('Download {name}', { name: track.title || track.fileName })}
                       >
                         <Download className="w-4 h-4" aria-hidden />
                       </button>
@@ -704,8 +726,8 @@ export function PlaylistDetailPage() {
                       onMouseDown={(e) => e.stopPropagation()}
                       onTouchStart={(e) => e.stopPropagation()}
                       className="p-2 text-slate-500 hover:text-red-400 transition-colors"
-                      aria-label={`Remove ${track.title || track.fileName} from the playlist`}
-                      title="Remove"
+                      aria-label={t('Remove {name} from the playlist', { name: track.title || track.fileName })}
+                      title={t('Remove')}
                     >
                       <Trash2 className="w-4 h-4" aria-hidden />
                     </button>
@@ -723,7 +745,7 @@ export function PlaylistDetailPage() {
         <button
           onClick={scrollToTop}
           className="fixed bottom-24 right-4 lg:bottom-28 lg:right-8 p-3 bg-emerald-500 hover:bg-emerald-600 rounded-full shadow-lg transition-all z-30"
-          aria-label="Scroll to top"
+          aria-label={t('Scroll to top')}
         >
           <ChevronUp className="w-5 h-5 text-white" />
         </button>

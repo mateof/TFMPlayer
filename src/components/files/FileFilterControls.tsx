@@ -1,4 +1,5 @@
 import { FILTER_OPTIONS, SORT_OPTIONS, type FileFilters } from '@/hooks/useFileFilters';
+import { t } from '@/i18n';
 
 const chipClass = (active: boolean) =>
   `px-3 py-1 text-sm rounded-full transition-colors focus-visible:outline-2 focus-visible:outline-emerald-400 ${
@@ -20,7 +21,7 @@ export function FileFilterControls({ filters }: { filters: FileFilters }) {
             aria-pressed={filterMode === opt.key}
             className={chipClass(filterMode === opt.key)}
           >
-            {opt.label}
+            {t(opt.label)}
           </button>
         ))}
       </div>
@@ -29,10 +30,10 @@ export function FileFilterControls({ filters }: { filters: FileFilters }) {
 
   return (
     <div className="space-y-3">
-      {group('general', 'Filter')}
-      {group('format', 'Audio Format')}
-      <div role="group" aria-label="Sort by">
-        <p className="text-xs text-slate-400 mb-2">Sort by</p>
+      {group('general', t('Filter'))}
+      {group('format', t('Audio Format'))}
+      <div role="group" aria-label={t('Sort by')}>
+        <p className="text-xs text-slate-400 mb-2">{t('Sort by')}</p>
         <div className="flex flex-wrap gap-2">
           {SORT_OPTIONS.map((opt) => {
             const active = sortBy === opt.key;
@@ -41,10 +42,14 @@ export function FileFilterControls({ filters }: { filters: FileFilters }) {
                 key={opt.key}
                 onClick={() => toggleSort(opt.key)}
                 aria-pressed={active}
-                aria-label={active ? `Sort by ${opt.label}, ${sortDesc ? 'descending' : 'ascending'}` : `Sort by ${opt.label}`}
+                aria-label={
+                  active
+                    ? t(sortDesc ? 'Sort by {field}, descending' : 'Sort by {field}, ascending', { field: t(opt.label) })
+                    : t('Sort by {field}', { field: t(opt.label) })
+                }
                 className={chipClass(active)}
               >
-                {opt.label} {active && (sortDesc ? '↓' : '↑')}
+                {t(opt.label)} {active && (sortDesc ? '↓' : '↑')}
               </button>
             );
           })}

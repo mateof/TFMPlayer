@@ -1,6 +1,7 @@
 import { useNavigate } from 'react-router-dom';
 import { ArrowLeft, MoreVertical } from 'lucide-react';
 import type { ReactNode } from 'react';
+import { t } from '@/i18n';
 
 interface HeaderProps {
   title: string;
@@ -28,7 +29,7 @@ export function Header({ title, subtitle, showBack = false, backPath, actions }:
           <button
             onClick={handleBack}
             className="p-2 -ml-2 text-slate-400 hover:text-white transition-colors touch-manipulation"
-            aria-label="Back"
+            aria-label={t('Back')}
           >
             <ArrowLeft className="w-5 h-5" aria-hidden />
           </button>

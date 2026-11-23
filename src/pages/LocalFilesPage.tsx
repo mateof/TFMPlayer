@@ -3,6 +3,7 @@ import { useSearchParams } from 'react-router-dom';
 import { FileBrowser, type FileSource } from '@/components/files/FileBrowser';
 import { localFilesApi } from '@/services/api/localFiles.api';
 import { collectLocalFolderTracks, localFileToTrack } from '@/utils/collectTracks';
+import { t } from '@/i18n';
 
 interface FolderBreadcrumb {
   path: string;
@@ -58,7 +59,7 @@ export function LocalFilesPage() {
   return (
     <FileBrowser
       source={source}
-      title={folderPath.length > 0 ? folderPath[folderPath.length - 1].name : 'Local Files'}
+      title={folderPath.length > 0 ? folderPath[folderPath.length - 1].name : t('Local Files')}
       backPath="/channels?tab=local"
       breadcrumbs={folderPath.map((f) => f.name)}
       onNavigateBreadcrumb={navigateBreadcrumb}

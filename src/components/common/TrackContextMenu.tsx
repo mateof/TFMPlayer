@@ -1,5 +1,6 @@
 import { X, ListPlus, Music } from 'lucide-react';
 import { useEffect, useRef } from 'react';
+import { t } from '@/i18n';
 import type { Track } from '@/types/models';
 
 interface TrackContextMenuProps {
@@ -51,14 +52,14 @@ export function TrackContextMenu({ track, onClose, onPlayNext, coverArt }: Track
         ref={menuRef}
         role="dialog"
         aria-modal="true"
-        aria-label={`Options for ${track.title || track.fileName}`}
+        aria-label={t('Options for {name}', { name: track.title || track.fileName })}
         className="w-full max-w-lg bg-slate-800 rounded-t-2xl overflow-hidden animate-in slide-in-from-bottom duration-300"
       >
         {/* Track info header */}
         <div className="flex items-center gap-4 p-4 border-b border-slate-700">
           <div className="w-14 h-14 bg-slate-700 rounded-lg flex items-center justify-center shrink-0 overflow-hidden">
             {coverArt ? (
-              <img src={coverArt} alt="Cover" className="w-full h-full object-cover" />
+              <img src={coverArt} alt={t('Cover')} className="w-full h-full object-cover" />
             ) : (
               <Music className="w-7 h-7 text-slate-400" />
             )}
@@ -74,7 +75,7 @@ export function TrackContextMenu({ track, onClose, onPlayNext, coverArt }: Track
           <button
             onClick={onClose}
             className="p-2 text-slate-400 hover:text-white transition-colors"
-            aria-label="Close"
+            aria-label={t('Close')}
           >
             <X className="w-5 h-5" aria-hidden />
           </button>
@@ -90,8 +91,8 @@ export function TrackContextMenu({ track, onClose, onPlayNext, coverArt }: Track
               <ListPlus className="w-5 h-5 text-emerald-400" />
             </div>
             <div className="text-left">
-              <p className="text-white font-medium">Play Next</p>
-              <p className="text-sm text-slate-400">Add to queue after current track</p>
+              <p className="text-white font-medium">{t('Play Next')}</p>
+              <p className="text-sm text-slate-400">{t('Add to queue after current track')}</p>
             </div>
           </button>
         </div>

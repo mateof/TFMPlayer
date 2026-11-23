@@ -1,6 +1,7 @@
 import { db, type CachedTrackEntity, updateTrackCoverArt } from '@/db/database';
 import type { Track } from '@/types/models';
-import * as mm from 'music-metadata';
+import { loadMusicMetadata } from '@/utils/musicMetadata';
+import { log } from '@/utils/logger';
 
 class CacheService {
   // Check if a track is cached
@@ -86,7 +87,7 @@ class CacheService {
       try {
         const buffer = await blob.arrayBuffer();
         const uint8Array = new Uint8Array(buffer);
-        const metadata = await mm.parseBuffer(uint8Array, {
+        const metadata = await (await loadMusicMetadata()).parseBuffer(uint8Array, {
           mimeType: blob.type || 'audio/mpeg',
           size: blob.size
         });
@@ -198,7 +199,7 @@ class CacheService {
     }
 
     if (removedCount > 0) {
-      console.log(`Cache limit: evicted ${removedCount} auto-cached tracks`);
+      log.debug(`Cache limit: evicted ${removedCount} auto-cached tracks`);
     }
     return removedCount;
   }

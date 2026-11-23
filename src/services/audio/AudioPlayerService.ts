@@ -4,88 +4,113 @@ import { buildStreamUrlWithAuth, buildLocalStreamUrlWithAuth } from '@/services/
 import { cacheService } from '@/services/cache/CacheService';
 import { playbackCache } from '@/services/cache/PlaybackCacheService';
 import { loadNextQueuePage } from '@/services/queue/QueueSourceService';
+import { playHistory } from '@/services/history/PlayHistoryService';
 import { useSettingsStore, type SoundEnhancementSettings } from '@/stores/settingsStore';
+import { useUiStore } from '@/stores/uiStore';
 import { EQ_BANDS } from '@/utils/eqPresets';
+import { log } from '@/utils/logger';
+import { t } from '@/i18n';
 import type { Track } from '@/types/models';
 
 // When this many (or fewer) tracks remain after the current one, page in more
 const QUEUE_PREFETCH_THRESHOLD = 10;
 
+// How long before the end the next track is loaded into the standby element
+const PREPARE_LEAD_SECONDS = 30;
+
+// Without crossfade the next track starts this close to the end. timeupdate
+// fires every ~250 ms, so this lands the changeover right at the boundary
+// with the old track still sounding (no silent gap at all).
+const GAPLESS_LEAD_SECONDS = 0.3;
+
+// Sleep timer: fade the volume out over the last seconds before pausing
+const SLEEP_FADE_SECONDS = 10;
+
+// Never crossfade tracks shorter than this many times the fade length
+const MIN_CROSSFADE_TRACK_RATIO = 3;
+
+interface ElementNodes {
+  source: MediaElementAudioSourceNode;
+  gain: GainNode;
+}
+
+interface PreparedSource {
+  trackId: string;
+  blob: Blob | null;
+}
+
+/**
+ * Playback engine.
+ *
+ * Two <audio> elements take turns: while one plays, the other loads the next
+ * track; at the end the next one starts BEFORE the current one is released.
+ * The page therefore never goes silent between tracks, which is what keeps
+ * Android from freezing it (and dropping the media notification) when the
+ * screen is off. The same overlap gives gapless playback and crossfade.
+ */
 class AudioPlayerService {
+  private readonly elements: [HTMLAudioElement, HTMLAudioElement];
+  // The element the UI, the media session and every control act on
   private audio: HTMLAudioElement;
-  private mediaSessionEnabled = 'mediaSession' in navigator;
-  private currentBlobUrl: string | null = null;
+  // The previous element while it fades/overlaps into the new one
+  private outgoing: HTMLAudioElement | null = null;
+  private outgoingWrapped = false;
+  // startedAt stays 0 until the incoming track actually sounds
+  private crossfade: { durationMs: number; startedAt: number } | null = null;
+
+  private mediaSessionEnabled = typeof navigator !== 'undefined' && 'mediaSession' in navigator;
+  private blobUrls = new Map<HTMLAudioElement, string>();
+  // Next track already loaded into the standby element
+  private prepared: PreparedSource | null = null;
+  private preparingFor: string | null = null;
+  // Shuffle picks the next track ahead of time so it can be prepared too
+  private plannedNextIndex: number | null = null;
 
   // Blob of the current track once it finishes auto-caching, so seeks can
   // switch to the local copy instead of re-downloading from the network
   private cachedBlobForCurrentTrack: Blob | null = null;
   private lastBufferedKey = '';
 
-  // Explicit playback intent. True whenever playback should be running
-  // (track started, auto-advance, resume) and false when the user paused.
-  // canplay/visibilitychange re-issue play() while this is true, so a
-  // rejected autoplay (background tab, autoplay policy, races) self-heals
-  // instead of leaving the next track loaded but paused.
+  // Playback should be (re)started by canplay/visibility/health checks
   private pendingAutoPlay = false;
+  // Sound is supposed to be coming out (until the user pauses or the queue ends)
+  private playbackIntent = false;
+  // A new source was assigned and has not started yet: its load-algorithm
+  // 'pause' must not be reported to the OS as a pause
+  private transitioning = false;
+  // Increments on every play() so a slow, superseded request gives up
+  private playToken = 0;
 
-  // Listener added by swapToCachedBlob; tracked so an interrupted swap
-  // can't fire its stale callback on the next track's load
   private swapLoadedListener: (() => void) | null = null;
 
-  // True while sound is supposed to be coming out (play/resume, until the
-  // user pauses or the queue ends). Drives the health monitor below.
-  private playbackIntent = false;
-
-  // Playback health monitor. Critical for track transitions with the screen
-  // off: if the browser blocks play(), suspends the AudioContext or freezes
-  // the element, no event-based retry ever fires and the audio stays silent
-  // until Android kills the app. Runs for as long as playback is intended
-  // (hidden-page timer throttling still fires it about once a minute, which
-  // is enough to revive playback).
   private healthMonitor: number | null = null;
   private lastHealthPosition = -1;
   private stallTicks = 0;
 
-  // Error recovery bookkeeping: reload the failing track a couple of times
-  // (fresh blob URL / stream), then skip forward instead of leaving the
-  // queue dead
   private errorRetryTrackId: string | null = null;
   private errorRetryCount = 0;
   private consecutiveErrorSkips = 0;
 
-  // True from the moment a new source is assigned until it starts playing.
-  // Assigning src runs the media load algorithm, which fires 'pause'; without
-  // this flag every track change told Android "playback stopped", which with
-  // the screen off is enough for the OS/browser to tear down the media
-  // session and freeze the page mid-transition.
-  private transitioning = false;
-
-  // Next track's source, resolved while the current one is still playing so
-  // the changeover needs no await (any silent async gap in the background is
-  // exactly when the page gets frozen)
-  private preloaded: { trackId: string; blob: Blob | null; url: string | null } | null = null;
-  private preloadAttemptedFor: string | null = null;
-
-  // End-guard state. On Android, the 'ended' event makes Chrome release
-  // audio focus and tear down the media session; after that, play() from a
-  // hidden page is rejected, so auto-advance dies with the screen off.
-  // The guard sets audio.loop whenever a follow-up track exists — 'ended'
-  // then never fires — and detects the loop wrap (position jumping back to
-  // the start) to advance while sound is still coming out of the element.
+  // End-guard (fallback when the next track wasn't ready in time): the active
+  // element loops whenever something follows, so 'ended' never fires and the
+  // wrap back to 0 is turned into the track change
   private lastTimeupdatePos = 0;
   private seekSuppressUntil = 0;
 
-  // Web Audio API for visualizer (lazy initialization)
-  // Uses captureStream() to analyze audio WITHOUT affecting playback quality
+  // Volume the user chose; per-element fade levels multiply it
+  private masterVolume = 1;
+  private levels = new Map<HTMLAudioElement, number>();
+
+  // Restored session: where to resume when play is first pressed
+  private resumeAt: number | null = null;
+
+  // Web Audio: visualizer + sound enhancement DSP chain
   private audioContext: AudioContext | null = null;
   private analyserNode: AnalyserNode | null = null;
   private streamSourceNode: MediaStreamAudioSourceNode | null = null;
   private visualizerInitialized = false;
-
-  // Sound enhancement DSP chain (Web Audio). Once createMediaElementSource
-  // is called the element's audio ALWAYS flows through the AudioContext, so
-  // the graph is built lazily on first enable and bypassed when disabled.
-  private mediaSource: MediaElementAudioSourceNode | null = null;
+  private nodes = new Map<HTMLAudioElement, ElementNodes>();
+  private mixBus: GainNode | null = null;
   private chainInput: GainNode | null = null;
   private chainOutput: AudioNode | null = null;
   private eqFilters: BiquadFilterNode[] = [];
@@ -97,24 +122,20 @@ class AudioPlayerService {
   private limiter: DynamicsCompressorNode | null = null;
   private dspEnabled = false;
 
-  // Cover art for MediaSession
   private currentCoverArt: string | null = null;
-
-  // Throttle position updates to avoid MediaSession issues
-  private lastPositionUpdate: number = 0;
-  private positionUpdateInterval: number = 5000; // Update every 5 seconds
+  private lastPositionUpdate = 0;
+  private readonly positionUpdateInterval = 5000;
+  private lastPersistAt = 0;
 
   constructor() {
-    this.audio = new Audio();
-    // A source is only ever assigned when it is about to play, so buffering
-    // eagerly shortens the changeover the browser must survive
-    this.audio.preload = 'auto';
-    // Enable CORS for cross-origin audio (needed for visualizer)
-    this.audio.crossOrigin = 'anonymous';
-    this.setupEventListeners();
+    this.elements = [this.createElement(), this.createElement()];
+    this.audio = this.elements[0];
+    this.elements.forEach((el) => this.setupEventListeners(el));
+    this.setupDocumentListeners();
+    if (this.mediaSessionEnabled) this.setupMediaSession();
 
-    // When the background cache finishes for the playing track, keep the blob
-    // around so the next seek uses it instead of the network
+    this.masterVolume = usePlayerStore.getState().volume ?? 1;
+
     playbackCache.onCached((trackId, blob) => {
       const store = usePlayerStore.getState();
       if (store.currentTrack?.fileId === trackId) {
@@ -123,7 +144,6 @@ class AudioPlayerService {
       }
     });
 
-    // Expose background cache progress so the UI can highlight the preloaded part
     playbackCache.onProgress((trackId, percent) => {
       const store = usePlayerStore.getState();
       if (store.currentTrack?.fileId === trackId) {
@@ -132,33 +152,65 @@ class AudioPlayerService {
     });
   }
 
-  // Initialize Web Audio API for visualizer (called on user interaction)
-  // Uses captureStream() - this does NOT affect audio quality as it creates a
-  // separate analysis stream while the original audio plays unchanged
+  private createElement(): HTMLAudioElement {
+    const el = new Audio();
+    // Sources are assigned only when about to play (or to prepare the next
+    // track): buffering eagerly shortens every changeover
+    el.preload = 'auto';
+    // CORS for the visualizer / Web Audio graph
+    el.crossOrigin = 'anonymous';
+    return el;
+  }
+
+  private get standby(): HTMLAudioElement {
+    return this.audio === this.elements[0] ? this.elements[1] : this.elements[0];
+  }
+
+  // ---------------------------------------------------------------------------
+  // Volume
+  // ---------------------------------------------------------------------------
+
+  private applyLevel(el: HTMLAudioElement): void {
+    const level = this.levels.get(el) ?? 1;
+    const node = this.nodes.get(el);
+    if (node) {
+      // Routed through Web Audio: the gain node is the single source of truth
+      el.volume = 1;
+      node.gain.gain.value = this.masterVolume * level;
+    } else {
+      el.volume = Math.max(0, Math.min(1, this.masterVolume * level));
+    }
+  }
+
+  private setLevel(el: HTMLAudioElement, level: number): void {
+    this.levels.set(el, Math.max(0, Math.min(1, level)));
+    this.applyLevel(el);
+  }
+
+  setVolume(volume: number): void {
+    this.masterVolume = Math.max(0, Math.min(1, volume));
+    this.elements.forEach((el) => this.applyLevel(el));
+    usePlayerStore.getState().setVolume(this.masterVolume);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Visualizer and DSP
+  // ---------------------------------------------------------------------------
+
   initVisualizer(): AnalyserNode | null {
-    // If already have an analyser, just resume context and return it
     if (this.analyserNode && this.audioContext) {
       this.resumeAudioContext();
       return this.analyserNode;
     }
-
     try {
-      // Create (or reuse) the audio context shared with the DSP chain
       this.audioContext = this.ensureAudioContext();
-
-      // Create analyser with good settings for visualization
       this.analyserNode = this.audioContext.createAnalyser();
-      this.analyserNode.fftSize = 8192; // Very high resolution for accurate low frequency bands (~5.4Hz per bin)
+      this.analyserNode.fftSize = 8192;
       this.analyserNode.smoothingTimeConstant = 0.7;
       this.analyserNode.minDecibels = -90;
       this.analyserNode.maxDecibels = -10;
-
       this.visualizerInitialized = true;
-
-      // Connect to current stream if audio is playing
       this.connectVisualizerStream();
-
-      console.log('Visualizer initialized with captureStream (audio quality unaffected)');
       return this.analyserNode;
     } catch (error) {
       console.error('Failed to initialize visualizer:', error);
@@ -166,35 +218,27 @@ class AudioPlayerService {
     }
   }
 
-  // Connect visualizer to current audio stream using captureStream()
-  // This creates a copy of the audio for analysis without affecting playback
   private connectVisualizerStream(): void {
     if (!this.audioContext || !this.analyserNode) return;
 
-    // With the DSP graph active, the element no longer outputs through
-    // captureStream: feed the analyser directly from the graph instead
-    if (this.mediaSource) {
+    // With the Web Audio graph active, tap the graph instead of captureStream
+    if (this.mixBus) {
       this.applyDspRouting(this.dspEnabled);
       return;
     }
 
     try {
-      // Disconnect previous source if any
       if (this.streamSourceNode) {
         this.streamSourceNode.disconnect();
         this.streamSourceNode = null;
       }
-
-      // Use captureStream to get a MediaStream from the audio element
-      // This does NOT route audio through Web Audio API - it creates a separate stream for analysis
-      const audioElement = this.audio as HTMLAudioElement & { captureStream?: () => MediaStream };
-      if (audioElement.captureStream) {
-        const stream = audioElement.captureStream();
+      const el = this.audio as HTMLAudioElement & { captureStream?: () => MediaStream };
+      if (el.captureStream) {
+        const stream = el.captureStream();
         if (stream.getAudioTracks().length > 0) {
           this.streamSourceNode = this.audioContext.createMediaStreamSource(stream);
-          // Only connect to analyser, NOT to destination (we don't want to hear it twice)
+          // Analysis only: never connected to the destination
           this.streamSourceNode.connect(this.analyserNode);
-          console.log('Visualizer connected via captureStream');
         }
       }
     } catch (error) {
@@ -202,59 +246,32 @@ class AudioPlayerService {
     }
   }
 
-  // Called when track changes to refresh visualizer connection
   refreshVisualizer(): void {
-    // Nothing to draw with the screen off, and captureStream work during a
-    // background track change is wasted effort: reconnection happens on the
-    // visibilitychange listener instead
+    // Nothing to draw with the screen off; reconnects on visibilitychange
     if (document.hidden) return;
-
-    // With captureStream, we need to reconnect when the track changes
-    // because the stream changes with the audio source
     this.resumeAudioContext();
-
-    // Reconnect after a small delay to ensure the new audio source is ready
     if (this.visualizerInitialized) {
-      setTimeout(() => {
-        this.connectVisualizerStream();
-      }, 100);
+      setTimeout(() => this.connectVisualizerStream(), 100);
     }
   }
 
-  // Get analyser node (returns null if not initialized)
   getAnalyserNode(): AnalyserNode | null {
     return this.analyserNode;
   }
 
-  // Resume audio context if suspended
   async resumeAudioContext(): Promise<void> {
     if (this.audioContext?.state === 'suspended') {
       await this.audioContext.resume();
     }
   }
 
-  private revokeBlobUrl(): void {
-    if (this.currentBlobUrl) {
-      URL.revokeObjectURL(this.currentBlobUrl);
-      this.currentBlobUrl = null;
-    }
-  }
-
   private ensureAudioContext(): AudioContext {
     if (!this.audioContext) {
       this.audioContext = new AudioContext();
-
-      // If the OS suspends the context while audio should be flowing through
-      // the DSP graph (screen off, focus changes), resume it right away —
-      // otherwise playback continues silently and Android ends up killing
-      // the app for being inaudible
+      // The OS may suspend the context (screen off, focus changes) while
+      // sound flows through it: resume at once or playback goes silent
       this.audioContext.addEventListener('statechange', () => {
-        if (
-          this.audioContext &&
-          this.audioContext.state !== 'running' &&
-          this.mediaSource &&
-          !this.audio.paused
-        ) {
+        if (this.audioContext && this.audioContext.state !== 'running' && this.mixBus && !this.audio.paused) {
           this.audioContext.resume().catch(() => {});
         }
       });
@@ -262,22 +279,39 @@ class AudioPlayerService {
     return this.audioContext;
   }
 
-  // Build the DSP graph once: source → EQ (10 bands) → bass boost →
-  // stereo widener (mid/side) → compressor → makeup gain → destination
-  private buildDspGraph(): boolean {
+  // Both elements get their own source + gain (used for crossfades) into a
+  // shared mix bus. Once an element has a MediaElementSource it only sounds
+  // through the graph, so both are wired at the same time.
+  private ensureElementNodes(): boolean {
+    if (this.mixBus) return true;
     try {
       const ctx = this.ensureAudioContext();
-
-      if (!this.mediaSource) {
-        this.mediaSource = ctx.createMediaElementSource(this.audio);
-        // From now on the element only sounds through the graph: route it
-        this.mediaSource.connect(ctx.destination);
+      this.mixBus = ctx.createGain();
+      for (const el of this.elements) {
+        const source = ctx.createMediaElementSource(el);
+        const gain = ctx.createGain();
+        source.connect(gain);
+        gain.connect(this.mixBus);
+        this.nodes.set(el, { source, gain });
+        this.applyLevel(el);
       }
-      if (this.chainInput && this.chainOutput) return true;
+      this.mixBus.connect(ctx.destination);
+      return true;
+    } catch (error) {
+      console.error('Failed to build the audio graph:', error);
+      return false;
+    }
+  }
 
+  // source → EQ (10 bands) → bass boost → stereo widener → compressor →
+  // makeup gain → limiter
+  private buildDspGraph(): boolean {
+    if (!this.ensureElementNodes()) return false;
+    if (this.chainInput && this.chainOutput) return true;
+    try {
+      const ctx = this.ensureAudioContext();
       this.chainInput = ctx.createGain();
 
-      // 10-band EQ: shelves at the extremes, peaking in between
       let node: AudioNode = this.chainInput;
       this.eqFilters = EQ_BANDS.map((freq, i) => {
         const filter = ctx.createBiquadFilter();
@@ -290,15 +324,13 @@ class AudioPlayerService {
         return filter;
       });
 
-      // Dedicated bass boost below 80Hz
       this.bassFilter = ctx.createBiquadFilter();
       this.bassFilter.type = 'lowshelf';
       this.bassFilter.frequency.value = 80;
       this.bassFilter.gain.value = 0;
       node.connect(this.bassFilter);
 
-      // Stereo widener: decompose into mid (L+R) and side (L-R), then
-      // recombine with the side channel amplified for extra width
+      // Stereo widener: mid (L+R) / side (L-R), side amplified
       const splitter = ctx.createChannelSplitter(2);
       const merger = ctx.createChannelMerger(2);
       const lToMid = ctx.createGain(); lToMid.gain.value = 0.5;
@@ -325,11 +357,8 @@ class AudioPlayerService {
       this.sideGain.connect(merger, 0, 0);
       this.sideGain.connect(sideInvert);
       sideInvert.connect(merger, 0, 1);
-
       this.mergerNode = merger;
 
-      // Volume leveling compressor: only wired into the path when the
-      // loudness setting is on (see applySoundSettings)
       this.compressor = ctx.createDynamicsCompressor();
       this.compressor.threshold.value = -24;
       this.compressor.knee.value = 20;
@@ -338,8 +367,7 @@ class AudioPlayerService {
       this.compressor.release.value = 0.25;
       this.makeupGain = ctx.createGain();
 
-      // Safety limiter: always last, prevents clipping distortion when
-      // EQ/bass boosts push an already-loud master over full scale
+      // Safety limiter, always last
       this.limiter = ctx.createDynamicsCompressor();
       this.limiter.threshold.value = -1.5;
       this.limiter.knee.value = 0;
@@ -347,7 +375,6 @@ class AudioPlayerService {
       this.limiter.attack.value = 0.001;
       this.limiter.release.value = 0.1;
 
-      // Default path (loudness off): merger → makeup → limiter
       merger.connect(this.makeupGain);
       this.compressor.connect(this.makeupGain);
       this.makeupGain.connect(this.limiter);
@@ -359,27 +386,21 @@ class AudioPlayerService {
     }
   }
 
-  // Route the media source through the DSP chain or straight to the output
   private applyDspRouting(enabled: boolean): void {
-    if (!this.mediaSource || !this.audioContext || !this.chainInput || !this.chainOutput) return;
+    if (!this.mixBus || !this.audioContext) return;
+    const canChain = !!(this.chainInput && this.chainOutput);
 
-    this.mediaSource.disconnect();
-    this.chainOutput.disconnect();
+    this.mixBus.disconnect();
+    this.chainOutput?.disconnect();
 
-    const tail = enabled ? this.chainOutput : this.mediaSource;
-    if (enabled) {
-      this.mediaSource.connect(this.chainInput);
-    }
+    const useChain = enabled && canChain;
+    if (useChain) this.mixBus.connect(this.chainInput!);
+    const tail = useChain ? this.chainOutput! : this.mixBus;
     tail.connect(this.audioContext.destination);
-    if (this.analyserNode) {
-      // Tap (not in series): feeds the visualizer from the audible signal
-      tail.connect(this.analyserNode);
-    }
-    this.dspEnabled = enabled;
+    if (this.analyserNode) tail.connect(this.analyserNode);
+    this.dspEnabled = useChain;
   }
 
-  // Apply sound enhancement settings, building the graph on first enable.
-  // Safe to call on every slider change: parameters update live.
   applySoundSettings(sound: SoundEnhancementSettings): void {
     if (sound.enabled) {
       if (!this.buildDspGraph()) return;
@@ -391,9 +412,6 @@ class AudioPlayerService {
       this.bassFilter!.gain.value = sound.bassBoost;
       this.sideGain!.gain.value = 1 + sound.stereoWidth / 100;
 
-      // Loudness: route through the compressor with auto-makeup so the net
-      // level stays comparable on loud masters and quiet tracks get lifted.
-      // makeup ≈ |threshold| · (1 − 1/ratio) / 2 = 24 · 0.6 / 2 ≈ +7dB
       this.mergerNode!.disconnect();
       if (sound.loudness) {
         this.mergerNode!.connect(this.compressor!);
@@ -402,96 +420,116 @@ class AudioPlayerService {
         this.mergerNode!.connect(this.makeupGain!);
         this.makeupGain!.gain.value = 1;
       }
-
       this.applyDspRouting(true);
-    } else if (this.mediaSource) {
+    } else if (this.mixBus) {
       this.applyDspRouting(false);
     }
-    // Never enabled and disabled: nothing was ever routed, nothing to do
   }
 
-  private setupEventListeners() {
-    const store = usePlayerStore.getState;
+  // ---------------------------------------------------------------------------
+  // Events
+  // ---------------------------------------------------------------------------
 
-    this.audio.addEventListener('loadstart', () => {
-      store().setState('loading');
-    });
-
-    this.audio.addEventListener('loadedmetadata', () => {
-      const duration = this.audio.duration;
-      if (Number.isFinite(duration) && duration > 0) {
-        store().setDuration(duration);
-        this.updatePositionState();
-      }
-    });
-
-    this.audio.addEventListener('durationchange', () => {
-      const duration = this.audio.duration;
-      if (Number.isFinite(duration) && duration > 0) {
-        store().setDuration(duration);
-        this.updatePositionState();
-      }
-    });
-
-    this.audio.addEventListener('canplay', () => {
-      // Start/resume playback whenever it should be running but isn't
-      if (this.pendingAutoPlay && this.audio.paused) {
-        this.audio.play().catch(console.error);
-      }
-    });
-
-    // If autoplay was blocked while the tab was hidden (e.g. auto-advance
-    // with the screen off), retry as soon as the tab becomes visible
+  private setupDocumentListeners(): void {
     document.addEventListener('visibilitychange', () => {
-      if (document.hidden) return;
-      if (this.pendingAutoPlay && this.audio.paused && this.audio.src) {
-        this.audio.play().catch(console.error);
+      if (document.hidden) {
+        this.persistPosition(true);
+        return;
       }
-      // Reconnect the visualizer stream skipped while hidden
-      if (this.visualizerInitialized) {
-        this.refreshVisualizer();
+      if (this.pendingAutoPlay && this.audio.paused && this.audio.src) {
+        this.audio.play().catch((e) => log.warn('Retry on visible failed', e));
+      }
+      if (this.visualizerInitialized) this.refreshVisualizer();
+    });
+
+    // Save where we were when the app is closed or killed
+    window.addEventListener('pagehide', () => this.persistPosition(true));
+  }
+
+  private setupEventListeners(el: HTMLAudioElement): void {
+    const store = usePlayerStore.getState;
+    // Events from the element that is not (or no longer) active are noise:
+    // its load/pause/end must never reach the UI or the OS media session
+    const isActive = () => el === this.audio;
+
+    el.addEventListener('loadstart', () => {
+      if (isActive() && this.transitioning) store().setState('loading');
+    });
+
+    const onDuration = () => {
+      if (!isActive()) return;
+      const duration = el.duration;
+      if (Number.isFinite(duration) && duration > 0) {
+        store().setDuration(duration);
+        this.updatePositionState();
+      }
+    };
+    el.addEventListener('loadedmetadata', onDuration);
+    el.addEventListener('durationchange', onDuration);
+
+    el.addEventListener('canplay', () => {
+      if (isActive() && this.pendingAutoPlay && el.paused) {
+        el.play().catch((e) => log.warn('play() on canplay failed', e));
       }
     });
 
-    this.audio.addEventListener('play', () => {
+    el.addEventListener('play', () => {
+      if (!isActive()) return;
       store().setState('playing');
       this.updateMediaSession();
-      // Update MediaSession playback state
       if (this.mediaSessionEnabled) {
         navigator.mediaSession.playbackState = 'playing';
-        // Reset throttle timer and update position after a small delay to ensure currentTime is accurate
         this.lastPositionUpdate = Date.now();
-        setTimeout(() => {
-          this.updatePositionState();
-        }, 150);
+        setTimeout(() => this.updatePositionState(), 150);
       }
     });
 
-    this.audio.addEventListener('pause', () => {
-      // A track change is not a pause: keep announcing 'playing' so the OS
-      // media session (and with it the page's right to keep running in the
-      // background) survives the changeover
-      if (this.transitioning || this.audio.ended) return;
+    el.addEventListener('playing', () => {
+      if (!isActive()) return;
+      this.pendingAutoPlay = false;
+      this.transitioning = false;
+      this.errorRetryCount = 0;
+      this.consecutiveErrorSkips = 0;
+      this.stallTicks = 0;
+      store().setState('playing');
+      // The new track is sounding: the old one can go now (unless it is
+      // crossfading out, in which case the fade releases it)
+      if (this.outgoing && !this.crossfade) this.releaseOutgoing();
+      // Crossfade clock starts when the incoming track really sounds
+      if (this.crossfade && this.crossfade.startedAt === 0) this.crossfade.startedAt = performance.now();
+    });
 
+    el.addEventListener('pause', () => {
+      if (!isActive()) return;
+      // A track change is not a pause: keep announcing 'playing' so the
+      // media session (and the page's right to run in background) survives
+      if (this.transitioning || el.ended) return;
       store().setState('paused');
-      // Update MediaSession playback state and position
       if (this.mediaSessionEnabled) {
         navigator.mediaSession.playbackState = 'paused';
         this.updatePositionState();
       }
+      this.persistPosition(true);
     });
 
-    this.audio.addEventListener('ended', () => {
-      this.handleTrackEnd();
+    el.addEventListener('ended', () => {
+      if (isActive()) this.handleTrackEnd();
     });
 
-    this.audio.addEventListener('timeupdate', () => {
-      this.handleEndGuard();
-      store().setPosition(this.audio.currentTime);
+    el.addEventListener('timeupdate', () => {
+      if (el === this.outgoing) {
+        this.handleOutgoingTick(el);
+        return;
+      }
+      if (!isActive()) return;
+      this.handleTransitionTiming();
+      this.handleSleepTimer();
+      this.updateCrossfade();
+      store().setPosition(el.currentTime);
       this.updateBufferedRanges();
-      this.maybePreloadNext();
-      // Throttle MediaSession position updates to avoid issues
-      // The browser extrapolates position between updates
+      this.maybePrepareNext();
+      playHistory.tick(store().currentTrack, el.currentTime, el.duration, !el.paused);
+      this.persistPosition(false);
       const now = Date.now();
       if (now - this.lastPositionUpdate >= this.positionUpdateInterval) {
         this.lastPositionUpdate = now;
@@ -499,40 +537,32 @@ class AudioPlayerService {
       }
     });
 
-    // Fired while the browser downloads the stream: keep buffered ranges fresh
-    this.audio.addEventListener('progress', () => {
-      this.updateBufferedRanges();
+    el.addEventListener('progress', () => {
+      if (isActive()) this.updateBufferedRanges();
     });
 
-    this.audio.addEventListener('waiting', () => {
-      store().setState('buffering');
+    el.addEventListener('waiting', () => {
+      if (isActive()) store().setState('buffering');
     });
 
-    this.audio.addEventListener('playing', () => {
-      this.pendingAutoPlay = false;
-      this.transitioning = false;
-      this.errorRetryCount = 0;
-      this.consecutiveErrorSkips = 0;
-      this.stallTicks = 0;
-      store().setState('playing');
-    });
+    el.addEventListener('error', () => {
+      // Clearing a source fires a spurious error: ignore it
+      if (!el.src || el.src === window.location.href) return;
 
-    this.audio.addEventListener('error', (e) => {
-      // Clearing src (stop) fires a spurious error event: ignore it
-      if (!this.audio.src || this.audio.src === window.location.href) return;
+      if (!isActive()) {
+        // The standby element failed to load the next track: play() will
+        // load it again the normal way when the time comes
+        if (el === this.standby && this.prepared) {
+          log.warn('Preparing the next track failed; it will load on demand');
+          this.prepared = null;
+          this.preparingFor = null;
+        }
+        return;
+      }
 
-      const error = this.audio.error;
-      console.error('Audio error:', {
-        event: e,
-        code: error?.code,
-        message: error?.message,
-        currentTime: this.audio.currentTime,
-        duration: this.audio.duration,
-        src: this.audio.src?.substring(0, 100)
-      });
+      const error = el.error;
+      console.error('Audio error:', { code: error?.code, message: error?.message, src: el.src?.substring(0, 100) });
 
-      // Self-heal instead of leaving the queue dead (essential with the
-      // screen off, where the user can't tap retry)
       const { currentTrack, queue, currentIndex } = usePlayerStore.getState();
       if (this.playbackIntent && currentTrack) {
         if (this.errorRetryTrackId !== currentTrack.fileId) {
@@ -541,7 +571,7 @@ class AudioPlayerService {
         }
         if (this.errorRetryCount < 2) {
           this.errorRetryCount++;
-          console.warn(`Retrying track after error (attempt ${this.errorRetryCount})`);
+          log.warn(`Retrying track after error (attempt ${this.errorRetryCount})`);
           window.setTimeout(() => {
             if (this.playbackIntent) this.play(currentTrack).catch(() => {});
           }, 1000);
@@ -549,349 +579,468 @@ class AudioPlayerService {
         }
         if (this.consecutiveErrorSkips < 5 && currentIndex < queue.length - 1) {
           this.consecutiveErrorSkips++;
-          console.warn('Track failed repeatedly, skipping to next');
-          this.next().catch(() => {});
+          log.warn('Track failed repeatedly, skipping to next');
+          this.next({ auto: true }).catch(() => {});
           return;
         }
       }
-
+      this.releaseOutgoing();
       store().setState('error');
-      store().setError(error?.message || 'Playback error');
+      store().setError(error?.message || t('Playback error'));
     });
+  }
 
-    // Handle stalled/suspended playback
-    this.audio.addEventListener('stalled', () => {
-      console.warn('Audio stalled - network issue or slow connection');
-    });
+  // ---------------------------------------------------------------------------
+  // Media Session
+  // ---------------------------------------------------------------------------
 
-    this.audio.addEventListener('suspend', () => {
-      console.log('Audio suspended - browser paused loading');
-    });
-
-    this.audio.addEventListener('volumechange', () => {
-      store().setVolume(this.audio.volume);
-    });
-
-    // Setup MediaSession handlers
-    if (this.mediaSessionEnabled) {
-      this.setupMediaSession();
+  private setupMediaSession(): void {
+    const handlers: [MediaSessionAction, MediaSessionActionHandler][] = [
+      ['play', () => this.resume()],
+      ['pause', () => this.pause()],
+      ['stop', () => this.pause()],
+      ['previoustrack', () => { this.previous(); }],
+      ['nexttrack', () => { this.next(); }],
+      ['seekto', (details) => {
+        if (details.seekTime !== undefined) this.seek(details.seekTime);
+      }],
+      ['seekbackward', (details) => {
+        const skip = details.seekOffset || useSettingsStore.getState().skipBackSeconds || 10;
+        this.seek(Math.max(this.audio.currentTime - skip, 0));
+      }],
+      ['seekforward', (details) => {
+        const skip = details.seekOffset || useSettingsStore.getState().skipForwardSeconds || 10;
+        this.seek(Math.min(this.audio.currentTime + skip, this.audio.duration));
+      }]
+    ];
+    for (const [action, handler] of handlers) {
+      try {
+        navigator.mediaSession.setActionHandler(action, handler);
+      } catch {
+        // Action not supported by this browser
+      }
     }
   }
 
-  private setupMediaSession() {
-    navigator.mediaSession.setActionHandler('play', () => this.resume());
-    navigator.mediaSession.setActionHandler('pause', () => this.pause());
-    navigator.mediaSession.setActionHandler('previoustrack', () => this.previous());
-    navigator.mediaSession.setActionHandler('nexttrack', () => this.next());
-    navigator.mediaSession.setActionHandler('seekto', (details) => {
-      if (details.seekTime !== undefined) {
-        this.seek(details.seekTime);
-      }
-    });
-    navigator.mediaSession.setActionHandler('seekbackward', (details) => {
-      const skipTime = details.seekOffset || useSettingsStore.getState().skipBackSeconds || 10;
-      this.seek(Math.max(this.audio.currentTime - skipTime, 0));
-    });
-    navigator.mediaSession.setActionHandler('seekforward', (details) => {
-      const skipTime = details.seekOffset || useSettingsStore.getState().skipForwardSeconds || 10;
-      this.seek(Math.min(this.audio.currentTime + skipTime, this.audio.duration));
-    });
-  }
-
-  private updateMediaSession() {
+  private updateMediaSession(): void {
     if (!this.mediaSessionEnabled) return;
-
     const track = usePlayerStore.getState().currentTrack;
     if (!track) return;
-
-    // Use BASE_URL for correct path on GitHub Pages
-    const baseUrl = import.meta.env.BASE_URL || '/';
-
-    // Build artwork array - use cover art if available, otherwise fallback to PWA icons
-    const artwork: MediaImage[] = this.currentCoverArt
-      ? [{ src: this.currentCoverArt, sizes: '512x512', type: 'image/jpeg' }]
-      : [
-          { src: `${baseUrl}pwa-192x192.svg`, sizes: '192x192', type: 'image/svg+xml' },
-          { src: `${baseUrl}pwa-512x512.svg`, sizes: '512x512', type: 'image/svg+xml' }
-        ];
 
     navigator.mediaSession.metadata = new MediaMetadata({
       title: track.title || track.fileName,
       artist: track.artist || track.channelName,
       album: track.album || '',
-      artwork
+      artwork: this.artworkFor()
     });
-
     this.updatePositionState();
   }
 
-  // Update cover art for MediaSession (called asynchronously when metadata loads)
+  // Desktop media controls (Windows, macOS, Linux) ignore SVG artwork, so
+  // the fallback is the app icon rasterised to PNG once
+  private fallbackArtwork: string | null = null;
+  private artworkFor(): MediaImage[] {
+    if (this.currentCoverArt) {
+      return [{ src: this.currentCoverArt, sizes: '512x512', type: 'image/jpeg' }];
+    }
+    const baseUrl = import.meta.env.BASE_URL || '/';
+    const images: MediaImage[] = [];
+    if (this.fallbackArtwork) images.push({ src: this.fallbackArtwork, sizes: '512x512', type: 'image/png' });
+    images.push(
+      { src: `${baseUrl}pwa-192x192.svg`, sizes: '192x192', type: 'image/svg+xml' },
+      { src: `${baseUrl}pwa-512x512.svg`, sizes: '512x512', type: 'image/svg+xml' }
+    );
+    if (!this.fallbackArtwork) this.rasterizeFallbackArtwork();
+    return images;
+  }
+
+  private rasterizeFallbackArtwork(): void {
+    if (this.fallbackArtwork !== null || typeof document === 'undefined') return;
+    this.fallbackArtwork = '';
+    const img = new Image();
+    img.onload = () => {
+      try {
+        const canvas = document.createElement('canvas');
+        canvas.width = canvas.height = 512;
+        canvas.getContext('2d')?.drawImage(img, 0, 0, 512, 512);
+        this.fallbackArtwork = canvas.toDataURL('image/png');
+        if (!this.currentCoverArt) this.updateMediaSession();
+      } catch {
+        this.fallbackArtwork = '';
+      }
+    };
+    img.src = `${import.meta.env.BASE_URL || '/'}pwa-512x512.svg`;
+  }
+
   updateCoverArt(coverArtDataUrl: string | null): void {
     this.currentCoverArt = coverArtDataUrl;
-    // Refresh MediaSession with new artwork
-    if (this.mediaSessionEnabled && coverArtDataUrl) {
-      const track = usePlayerStore.getState().currentTrack;
-      if (track) {
-        navigator.mediaSession.metadata = new MediaMetadata({
-          title: track.title || track.fileName,
-          artist: track.artist || track.channelName,
-          album: track.album || '',
-          artwork: [{ src: coverArtDataUrl, sizes: '512x512', type: 'image/jpeg' }]
-        });
-      }
-    }
+    if (this.mediaSessionEnabled && coverArtDataUrl) this.updateMediaSession();
   }
 
-  private updatePositionState() {
+  private updatePositionState(): void {
     if (!this.mediaSessionEnabled) return;
-
     const duration = this.audio.duration;
     const position = this.audio.currentTime;
-    const playbackRate = this.audio.playbackRate;
-
-    // Only update if we have valid finite values
     if (!Number.isFinite(duration) || duration <= 0 || duration > 86400) return;
     if (!Number.isFinite(position) || position < 0) return;
-
-    // Ensure position doesn't exceed duration
-    const safePosition = Math.min(Math.max(0, position), duration);
-
     try {
       navigator.mediaSession.setPositionState({
-        duration: duration,
-        playbackRate: playbackRate || 1,
-        position: safePosition
+        duration,
+        playbackRate: this.audio.playbackRate || 1,
+        position: Math.min(Math.max(0, position), duration)
       });
     } catch {
-      // Ignore errors (some browsers don't support this)
+      // Not supported
     }
   }
 
-  // Force update position state (call after seek or play)
   forceUpdatePositionState(): void {
     this.updatePositionState();
   }
 
-  // Publish the audio element's buffered ranges to the store (skips the
-  // update when nothing changed to avoid needless re-renders)
   private updateBufferedRanges(): void {
     const buffered = this.audio.buffered;
     const ranges: { start: number; end: number }[] = [];
     for (let i = 0; i < buffered.length; i++) {
       ranges.push({ start: buffered.start(i), end: buffered.end(i) });
     }
-
-    const key = ranges.map(r => `${r.start.toFixed(1)}-${r.end.toFixed(1)}`).join(',');
+    const key = ranges.map((r) => `${r.start.toFixed(1)}-${r.end.toFixed(1)}`).join(',');
     if (key === this.lastBufferedKey) return;
     this.lastBufferedKey = key;
-
     usePlayerStore.getState().setBufferedRanges(ranges);
   }
 
-  // Where a track's audio comes from: the locally cached blob when available,
-  // otherwise a direct stream URL the browser can Range-request natively.
-  // Pure async lookup — it touches no player state, so it is safe to run
-  // ahead of time for the upcoming track.
-  private async resolveSource(
-    track: Track
-  ): Promise<{ blob: Blob | null; url: string | null }> {
+  // ---------------------------------------------------------------------------
+  // Sources and the standby element
+  // ---------------------------------------------------------------------------
+
+  private async resolveSource(track: Track): Promise<{ blob: Blob | null; url: string | null }> {
     try {
       const cached = await db.cachedTracks.get(track.fileId);
       if (cached?.blob) return { blob: cached.blob, url: null };
     } catch (e) {
-      console.warn('Error checking cache:', e);
+      log.warn('Error checking cache:', e);
     }
-
     const url = track.isLocalFile
       ? await buildLocalStreamUrlWithAuth(track.filePath)
       : await buildStreamUrlWithAuth(track.channelId, track.fileId, track.fileName);
     return { blob: null, url };
   }
 
-  // Resolve the upcoming track's source while the current one still plays, so
-  // the transition itself is synchronous. Skipped on shuffle (the next track
-  // isn't known) and when the source is a network stream anyway.
-  private maybePreloadNext(): void {
+  private assignSource(el: HTMLAudioElement, source: { blob: Blob | null; url: string | null }): void {
+    this.revokeElementUrl(el);
+    let url = source.url;
+    if (source.blob) {
+      url = URL.createObjectURL(source.blob);
+      this.blobUrls.set(el, url);
+    }
+    if (!url) throw new Error('No playable source for track');
+    el.loop = false;
+    el.src = url;
+  }
+
+  private revokeElementUrl(el: HTMLAudioElement): void {
+    const url = this.blobUrls.get(el);
+    if (url) {
+      URL.revokeObjectURL(url);
+      this.blobUrls.delete(el);
+    }
+  }
+
+  // Stop an element and let go of its source
+  private releaseElement(el: HTMLAudioElement): void {
+    el.loop = false;
+    el.pause();
+    if (el.src) {
+      el.removeAttribute('src');
+      el.load();
+    }
+    this.revokeElementUrl(el);
+    this.setLevel(el, 1);
+  }
+
+  private releaseOutgoing(): void {
+    const el = this.outgoing;
+    this.outgoing = null;
+    this.outgoingWrapped = false;
+    this.crossfade = null;
+    if (el && el !== this.audio) this.releaseElement(el);
+    this.setLevel(this.audio, 1);
+  }
+
+  // The outgoing element is still sounding: drive the fade, or once it wraps
+  // around (no crossfade, next track still loading) keep it very quiet so it
+  // holds the audio session without replaying the old song out loud
+  private handleOutgoingTick(el: HTMLAudioElement): void {
+    if (this.crossfade) {
+      // The old track wrapped around before the fade finished: cut it there
+      // rather than replay its beginning under the new one
+      if (el.currentTime < 2 && this.crossfade.startedAt > 0) {
+        this.releaseOutgoing();
+        return;
+      }
+      this.updateCrossfade();
+      return;
+    }
+    if (!this.outgoingWrapped && el.currentTime < 2) {
+      this.outgoingWrapped = true;
+      this.setLevel(el, 0.03);
+    }
+  }
+
+  private updateCrossfade(): void {
+    if (!this.crossfade || !this.outgoing || this.crossfade.startedAt === 0) return;
+    const progress = Math.min(1, (performance.now() - this.crossfade.startedAt) / this.crossfade.durationMs);
+    // Equal-power curves keep the perceived loudness steady
+    this.setLevel(this.outgoing, Math.cos((progress * Math.PI) / 2));
+    this.setLevel(this.audio, Math.sin((progress * Math.PI) / 2));
+    if (progress >= 1) this.releaseOutgoing();
+  }
+
+  /** Index that follows the current one (planned ahead for shuffle). */
+  private peekNextIndex(): number {
     const { queue, currentIndex, shuffle, repeatMode } = usePlayerStore.getState();
-    if (shuffle || repeatMode === 'one') return;
+    if (queue.length === 0) return -1;
+    if (shuffle) {
+      if (queue.length < 2) return repeatMode === 'all' ? currentIndex : -1;
+      if (this.plannedNextIndex === null || this.plannedNextIndex === currentIndex || this.plannedNextIndex >= queue.length) {
+        let pick = Math.floor(Math.random() * (queue.length - 1));
+        if (pick >= currentIndex) pick++;
+        this.plannedNextIndex = pick;
+      }
+      return this.plannedNextIndex;
+    }
+    if (currentIndex < queue.length - 1) return currentIndex + 1;
+    return repeatMode === 'all' ? 0 : -1;
+  }
 
+  private crossfadeSecondsFor(duration: number): number {
+    const seconds = useSettingsStore.getState().crossfadeSeconds ?? 0;
+    if (seconds <= 0 || !Number.isFinite(duration)) return 0;
+    return duration >= seconds * MIN_CROSSFADE_TRACK_RATIO ? seconds : 0;
+  }
+
+  // Load the next track into the standby element while this one plays
+  private maybePrepareNext(): void {
+    const { queue, repeatMode } = usePlayerStore.getState();
+    if (repeatMode === 'one' || this.transitioning || this.outgoing) return;
     const duration = this.audio.duration;
-    if (!Number.isFinite(duration) || duration - this.audio.currentTime > 30) return;
+    if (!Number.isFinite(duration)) return;
+    const lead = Math.max(PREPARE_LEAD_SECONDS, this.crossfadeSecondsFor(duration) + 15);
+    if (duration - this.audio.currentTime > lead) return;
 
-    const nextIndex = currentIndex < queue.length - 1
-      ? currentIndex + 1
-      : repeatMode === 'all' ? 0 : -1;
-    if (nextIndex < 0 || nextIndex === currentIndex) return;
+    const nextIndex = this.peekNextIndex();
+    if (nextIndex < 0) return;
+    const track = queue[nextIndex];
+    if (!track || track.fileId === usePlayerStore.getState().currentTrack?.fileId) return;
+    if (this.preparingFor === track.fileId) return;
+    this.preparingFor = track.fileId;
 
-    const nextTrack = queue[nextIndex];
-    if (!nextTrack || this.preloadAttemptedFor === nextTrack.fileId) return;
-    this.preloadAttemptedFor = nextTrack.fileId;
-
-    this.resolveSource(nextTrack)
+    this.resolveSource(track)
       .then((source) => {
-        this.preloaded = { trackId: nextTrack.fileId, ...source };
+        // Superseded meanwhile (user skipped, queue changed)
+        if (this.preparingFor !== track.fileId || this.transitioning) return;
+        const el = this.standby;
+        this.releaseElement(el);
+        this.assignSource(el, source);
+        el.load();
+        this.prepared = { trackId: track.fileId, blob: source.blob };
+        log.debug('Prepared next track', track.fileName);
       })
-      .catch(() => {});
+      .catch((e) => {
+        log.warn('Could not prepare next track', e);
+        this.preparingFor = null;
+      });
   }
 
-  private takePreloaded(track: Track): { blob: Blob | null; url: string | null } | null {
-    if (this.preloaded?.trackId !== track.fileId) return null;
-    const { blob, url } = this.preloaded;
-    this.preloaded = null;
-    return { blob, url };
-  }
-
-  // Keep audio.loop in sync with "is there something to play next", and turn
-  // the loop wrap into the track change. While the wrap plays the start of
-  // the old track for a fraction of a second, the element never stops
-  // sounding, so the media session/audio focus survive and the swap to the
-  // next source is allowed even with the screen off.
-  private handleEndGuard(): void {
-    const pos = this.audio.currentTime;
+  // Decide when the next track starts: early enough for the crossfade, or
+  // right at the end (gapless) when it is already loaded. If it is not ready
+  // the loop wrap below still triggers the change without silence.
+  private handleTransitionTiming(): void {
+    const el = this.audio;
+    const pos = el.currentTime;
     const prev = this.lastTimeupdatePos;
     this.lastTimeupdatePos = pos;
 
-    const duration = this.audio.duration;
+    const duration = el.duration;
     if (!Number.isFinite(duration) || duration <= 0) return;
 
-    const { queue, currentIndex, repeatMode, shuffle } = usePlayerStore.getState();
+    const { queue, currentIndex, repeatMode, shuffle, sleepAtEndOfTrack } = usePlayerStore.getState();
     const hasFollowUp =
-      repeatMode === 'one' ||
-      repeatMode === 'all' ||
-      (shuffle && queue.length > 1) ||
-      currentIndex < queue.length - 1;
+      !sleepAtEndOfTrack &&
+      (repeatMode === 'one' || repeatMode === 'all' || (shuffle && queue.length > 1) || currentIndex < queue.length - 1);
 
-    if (this.audio.loop !== hasFollowUp) {
-      this.audio.loop = hasFollowUp;
+    if (el.loop !== hasFollowUp) el.loop = hasFollowUp;
+    if (repeatMode === 'one' || this.transitioning || this.outgoing) return;
+
+    // Sleep timer set to "end of this track"
+    if (sleepAtEndOfTrack && duration - pos <= GAPLESS_LEAD_SECONDS) {
+      this.finishSleep();
+      return;
+    }
+    if (!hasFollowUp) return;
+
+    const nextIndex = this.peekNextIndex();
+    const nextReady = nextIndex >= 0 && this.prepared?.trackId === queue[nextIndex]?.fileId;
+    const fade = this.crossfadeSecondsFor(duration);
+    const remaining = duration - pos;
+
+    if (nextReady && remaining <= Math.max(fade, GAPLESS_LEAD_SECONDS)) {
+      log.debug(fade ? `Crossfading over ${fade}s` : 'Gapless changeover');
+      this.transitioning = true;
+      this.next({ auto: true, crossfadeSeconds: fade ? Math.max(remaining, 1) : 0 }).catch(() => {});
+      return;
     }
 
-    // Detect the loop wrap: a large backwards jump not caused by a seek.
-    // repeat-one needs no handling — the native loop IS the repeat.
-    if (!hasFollowUp || repeatMode === 'one' || this.transitioning) return;
+    // Fallback: the loop wrapped before the next track was ready
     if (Date.now() < this.seekSuppressUntil) return;
-
     const wrapped =
       (prev > duration - 10 && pos < 3 && prev - pos > 2) ||
       prev - pos > Math.max(10, duration * 0.5);
     if (wrapped) {
-      console.log('End-guard: loop wrap detected, advancing to next track');
-      // Block re-triggering from further timeupdates while next() resolves
+      log.info('End-guard: loop wrap detected, advancing to next track');
       this.transitioning = true;
-      this.next().catch(() => {});
+      this.next({ auto: true }).catch(() => {});
     }
   }
 
-  async play(track: Track, queue?: Track[], startIndex?: number): Promise<void> {
-    const store = usePlayerStore.getState();
+  // ---------------------------------------------------------------------------
+  // Playback
+  // ---------------------------------------------------------------------------
 
-    // Set queue if provided
+  async play(
+    track: Track,
+    queue?: Track[],
+    startIndex?: number,
+    options: { auto?: boolean; crossfadeSeconds?: number; startAt?: number } = {}
+  ): Promise<void> {
+    const store = usePlayerStore.getState();
+    const token = ++this.playToken;
+    // A changeover still in progress is finished first: its outgoing element
+    // is the standby one we are about to load into
+    if (this.outgoing) this.releaseOutgoing();
+
     if (queue && queue.length > 0) {
       store.setQueue(queue);
       store.setCurrentIndex(startIndex ?? 0);
     }
-
-    // Set current track
+    this.plannedNextIndex = null;
     store.setCurrentTrack(track);
     store.setState('loading');
-
-    // Clear previous cover art for new track
     this.currentCoverArt = null;
+    this.resumeAt = null;
 
     try {
-      // Resolve the source BEFORE touching the element: the old track keeps
-      // playing meanwhile, so the page is never silent-and-idle waiting on
-      // IndexedDB. Usually already resolved by maybePreloadNext().
-      const source = this.takePreloaded(track) ?? await this.resolveSource(track);
+      const old = this.audio;
+      const oldIsSounding = !!old.src && !old.paused && !old.ended;
+      // Keep the old track sounding until the new one starts whenever the
+      // change happens unattended (end of track, lock screen buttons, screen
+      // off): that continuity is what Android needs to keep us alive
+      const overlap = oldIsSounding && (options.auto || document.hidden);
 
-      // Everything below is synchronous through to play(), leaving no gap
-      // the browser could freeze the page in
+      let target = this.standby;
+      let blob: Blob | null;
+      if (this.prepared?.trackId === track.fileId && target.src) {
+        blob = this.prepared.blob;
+      } else {
+        // Resolve before touching any element: the old track keeps playing
+        const source = await this.resolveSource(track);
+        if (token !== this.playToken) return; // superseded
+        target = this.standby;
+        this.releaseElement(target);
+        this.assignSource(target, source);
+        blob = source.blob;
+      }
+      this.prepared = null;
+      this.preparingFor = null;
+
+      // From here to play() everything is synchronous
       this.transitioning = true;
-      const staleBlobUrl = this.currentBlobUrl;
       this.clearSwapLoadedListener();
-      this.cachedBlobForCurrentTrack = source.blob;
+      this.audio = target;
+      this.cachedBlobForCurrentTrack = blob;
       this.lastBufferedKey = '';
-      this.preloadAttemptedFor = null;
-      store.setBufferedRanges([]);
-
-      this.currentBlobUrl = source.blob ? URL.createObjectURL(source.blob) : null;
-      const url = this.currentBlobUrl ?? source.url;
-      if (!url) throw new Error('No playable source for track');
-
-      // Cached tracks are fully available from the start
-      store.setCachedPercent(this.currentBlobUrl ? 100 : 0);
-
-      // Set new source and play. pendingAutoPlay makes canplay/visibility
-      // retry the play() if this first attempt is rejected (autoplay policy,
-      // background tab) so auto-advance never leaves the track paused.
-      this.pendingAutoPlay = true;
-      this.playbackIntent = true;
-      this.audio.src = url;
-      this.audio.volume = store.volume;
-      // Fresh source: reset end-guard tracking so the position drop from the
-      // old track isn't read as a loop wrap
       this.lastTimeupdatePos = 0;
       this.seekSuppressUntil = Date.now() + 2000;
+      store.setBufferedRanges([]);
+      store.setCachedPercent(blob ? 100 : 0);
+      playHistory.start(track);
 
-      // Safe now that the element no longer references it
-      if (staleBlobUrl) URL.revokeObjectURL(staleBlobUrl);
+      if (overlap) {
+        this.outgoing = old;
+        this.outgoingWrapped = false;
+        // Keep looping until released: if the new source is slow to start,
+        // the old element must not reach 'ended' (silence) in the meantime
+        old.loop = true;
+        const fade = options.crossfadeSeconds ?? 0;
+        if (fade > 0) {
+          this.crossfade = { durationMs: fade * 1000, startedAt: 0 };
+          this.setLevel(target, 0);
+        } else {
+          this.crossfade = null;
+          this.setLevel(target, 1);
+        }
+      } else {
+        this.setLevel(target, 1);
+        if (old !== target) this.releaseElement(old);
+      }
 
-      // Ensure the sound enhancement chain matches settings before playing
+      if (options.startAt && options.startAt > 0) {
+        const startAt = options.startAt;
+        target.addEventListener('loadedmetadata', () => {
+          if (this.audio === target) target.currentTime = startAt;
+        }, { once: true });
+      }
+
+      this.pendingAutoPlay = true;
+      this.playbackIntent = true;
+
       const { sound } = useSettingsStore.getState();
       if (sound.enabled && !this.dspEnabled) {
         this.applySoundSettings(sound);
-      } else if (this.mediaSource) {
+      } else if (this.mixBus) {
         this.resumeAudioContext();
       }
 
       try {
-        await this.audio.play();
+        await target.play();
       } catch (playError) {
         if (playError instanceof DOMException && playError.name === 'NotAllowedError') {
-          // Autoplay blocked: keep the intent, the retry hooks will resume
-          console.warn('Autoplay blocked, will retry on canplay/visibility');
+          log.warn('Autoplay blocked, will retry on canplay/visibility');
+        } else if (playError instanceof DOMException && playError.name === 'AbortError') {
+          // Superseded by a newer source: nothing to do
         } else {
           throw playError;
         }
       }
 
-      // Keep watching in the background (screen off, throttled tab) until
-      // playback actually starts, and while it runs
       this.startHealthMonitor();
-
-      // Refresh visualizer connection for new track
       this.refreshVisualizer();
-
-      // Keep LRU eviction data fresh (no-op if the track isn't cached)
       cacheService.updateLastPlayed(track.fileId).catch(() => {});
 
-      // If streaming from the network, cache the full track in the background
-      // so seeks and replays reuse the local copy
-      if (!this.currentBlobUrl) {
+      if (!blob) {
         playbackCache.cacheTrackInBackground(track).catch(() => {});
       }
 
-      // If the queue comes from a paginated source and we're near its end,
-      // load the next page so the upcoming tracks are known
       const { queue: currentQueue, currentIndex, queueSource } = usePlayerStore.getState();
-      if (queueSource?.hasMore &&
-          currentQueue.length - 1 - currentIndex <= QUEUE_PREFETCH_THRESHOLD) {
-        loadNextQueuePage().catch((e) => console.warn('Queue prefetch failed:', e));
+      if (queueSource?.hasMore && currentQueue.length - 1 - currentIndex <= QUEUE_PREFETCH_THRESHOLD) {
+        loadNextQueuePage().catch((e) => log.warn('Queue prefetch failed:', e));
       }
     } catch (error) {
       console.error('Playback error:', error);
       this.transitioning = false;
+      this.releaseOutgoing();
       store.setState('error');
-      store.setError('Failed to play track');
+      store.setError(t('Failed to play track'));
     }
   }
 
-  async playAtIndex(index: number): Promise<void> {
+  async playAtIndex(index: number, options: { auto?: boolean; crossfadeSeconds?: number } = {}): Promise<void> {
     const store = usePlayerStore.getState();
     const { queue } = store;
-
     if (index >= 0 && index < queue.length) {
       store.setCurrentIndex(index);
-      await this.play(queue[index]);
+      await this.play(queue[index], undefined, undefined, options);
     }
   }
 
@@ -900,55 +1049,83 @@ class AudioPlayerService {
     this.playbackIntent = false;
     this.transitioning = false;
     this.stopHealthMonitor();
+    this.releaseOutgoing();
     this.audio.pause();
   }
 
   resume(): void {
-    if (this.audio.src) {
-      this.pendingAutoPlay = true;
-      this.playbackIntent = true;
-      this.startHealthMonitor();
-      this.audio.play().catch(console.error);
+    if (!this.audio.src) {
+      // Restored session: load the remembered track where it was left
+      this.resumeRestored();
+      return;
     }
+    this.pendingAutoPlay = true;
+    this.playbackIntent = true;
+    this.startHealthMonitor();
+    this.audio.play().catch((e) => log.warn('resume failed', e));
   }
 
   async togglePlayPause(): Promise<void> {
     if (this.audio.paused) {
+      if (!this.audio.src) {
+        this.resumeRestored();
+        return;
+      }
       this.pendingAutoPlay = true;
       this.playbackIntent = true;
       this.startHealthMonitor();
       await this.audio.play();
     } else {
-      this.pendingAutoPlay = false;
-      this.playbackIntent = false;
-      this.stopHealthMonitor();
-      this.audio.pause();
+      this.pause();
     }
+  }
+
+  private resumeRestored(): void {
+    const { currentTrack } = usePlayerStore.getState();
+    if (!currentTrack) return;
+    const startAt = this.resumeAt ?? usePlayerStore.getState().savedPosition ?? 0;
+    this.play(currentTrack, undefined, undefined, { startAt }).catch(() => {});
+  }
+
+  /**
+   * Called once at startup: the queue and track come back from storage, but
+   * nothing is loaded until the user presses play (no surprise audio).
+   */
+  restoreSession(): void {
+    const { currentTrack, savedPosition } = usePlayerStore.getState();
+    if (!currentTrack) return;
+    this.resumeAt = savedPosition ?? 0;
+    usePlayerStore.getState().setState('paused');
+    usePlayerStore.getState().setPosition(this.resumeAt);
   }
 
   seek(position: number): void {
     try {
-      if (this.audio.duration && isFinite(position) && isFinite(this.audio.duration)) {
-        // A deliberate seek must not be mistaken for the end-guard loop wrap
+      const duration = this.audio.duration;
+      if (duration && isFinite(position) && isFinite(duration)) {
         this.seekSuppressUntil = Date.now() + 2000;
-        const newPosition = Math.max(0, Math.min(position, this.audio.duration));
-        console.log('Seeking to:', newPosition, 'of', this.audio.duration);
-
-        // If the track finished caching while streaming, switch to the local
-        // blob so this (and any further) seek doesn't hit the network
+        const newPosition = Math.max(0, Math.min(position, duration));
+        // A seek while crossfading cancels the fade: keep the new track only
+        if (this.outgoing) this.releaseOutgoing();
         if (this.cachedBlobForCurrentTrack && !this.audio.src.startsWith('blob:')) {
           this.swapToCachedBlob(newPosition);
           return;
         }
-
         this.audio.currentTime = newPosition;
-        // Reset throttle timer and update position immediately after seek
         this.lastPositionUpdate = Date.now();
         this.updatePositionState();
+      } else if (!this.audio.src && isFinite(position)) {
+        // Restored but not loaded yet: remember where to start
+        this.resumeAt = Math.max(0, position);
+        usePlayerStore.getState().setPosition(this.resumeAt);
       }
     } catch (error) {
       console.error('Seek error:', error);
     }
+  }
+
+  seekPercent(percent: number): void {
+    if (this.audio.duration) this.seek((percent / 100) * this.audio.duration);
   }
 
   private startHealthMonitor(): void {
@@ -970,42 +1147,34 @@ class AudioPlayerService {
       this.stopHealthMonitor();
       return;
     }
+    // The sleep timer must also fire if timeupdate is throttled
+    this.handleSleepTimer();
 
-    // Keep the AudioContext alive while sound is routed through it
-    if (this.mediaSource && this.audioContext && this.audioContext.state !== 'running') {
+    if (this.mixBus && this.audioContext && this.audioContext.state !== 'running') {
       this.audioContext.resume().catch(() => {});
     }
 
-    const playing = !this.audio.paused && !this.audio.ended;
-
-    // Should be starting but isn't (blocked autoplay, background races):
-    // keep re-issuing play(). OS-initiated pauses mid-track (phone call,
-    // another app taking audio focus) are respected: pendingAutoPlay is
-    // false once a track has started.
+    const el = this.audio;
+    const playing = !el.paused && !el.ended;
     if (!playing) {
-      if (this.pendingAutoPlay && this.audio.src) {
-        this.audio.play().catch(() => {});
-      }
+      if (this.pendingAutoPlay && el.src) el.play().catch(() => {});
       return;
     }
 
-    // Element claims to be playing but time is frozen: reload local sources.
-    // Network sources are left alone, a stall there is usually buffering.
-    const pos = this.audio.currentTime;
-    if (pos === this.lastHealthPosition && this.audio.src.startsWith('blob:')) {
+    const pos = el.currentTime;
+    if (pos === this.lastHealthPosition && el.src.startsWith('blob:')) {
       this.stallTicks++;
       if (this.stallTicks >= 3) {
-        console.warn('Playback frozen, reloading source at', pos);
+        log.warn('Playback frozen, reloading source at', pos);
         this.stallTicks = 0;
         this.pendingAutoPlay = true;
-        const src = this.audio.src;
-        this.audio.addEventListener('loadedmetadata', () => {
-          // Only restore position if the track didn't change meanwhile
-          if (this.audio.src !== src) return;
-          this.audio.currentTime = pos;
-          this.audio.play().catch(() => {});
+        const src = el.src;
+        el.addEventListener('loadedmetadata', () => {
+          if (el.src !== src || el !== this.audio) return;
+          el.currentTime = pos;
+          el.play().catch(() => {});
         }, { once: true });
-        this.audio.load();
+        el.load();
       }
     } else {
       this.stallTicks = 0;
@@ -1020,170 +1189,167 @@ class AudioPlayerService {
     }
   }
 
-  // Replace the network stream source with the cached blob, preserving
-  // position and play/pause state
+  // Replace the network stream with the cached blob, keeping position/state
   private swapToCachedBlob(position: number): void {
     const blob = this.cachedBlobForCurrentTrack;
     if (!blob) return;
+    const el = this.audio;
+    const wasPlaying = !el.paused && !el.ended;
 
-    const wasPlaying = !this.audio.paused && !this.audio.ended;
-    console.log('Switching to cached blob for local seeking');
-
-    this.revokeBlobUrl();
     this.clearSwapLoadedListener();
+    this.revokeElementUrl(el);
     const blobUrl = URL.createObjectURL(blob);
-    this.currentBlobUrl = blobUrl;
+    this.blobUrls.set(el, blobUrl);
     this.pendingAutoPlay = wasPlaying;
+    // The source swap pauses the element: not a user pause
+    this.transitioning = wasPlaying;
 
     const onLoaded = () => {
       this.clearSwapLoadedListener();
-      this.audio.currentTime = position;
+      el.currentTime = position;
       this.lastPositionUpdate = Date.now();
       this.updatePositionState();
       if (wasPlaying) {
-        this.audio.play().catch(console.error);
+        el.play().catch((e) => log.warn('play after blob swap failed', e));
       } else {
         usePlayerStore.getState().setState('paused');
       }
       this.refreshVisualizer();
     };
     this.swapLoadedListener = onLoaded;
-    this.audio.addEventListener('loadedmetadata', onLoaded);
-    this.audio.src = blobUrl;
-    this.audio.load();
+    el.addEventListener('loadedmetadata', onLoaded);
+    el.src = blobUrl;
+    el.load();
   }
 
-  seekPercent(percent: number): void {
-    if (this.audio.duration) {
-      this.seek((percent / 100) * this.audio.duration);
-    }
-  }
-
-  setVolume(volume: number): void {
-    this.audio.volume = Math.max(0, Math.min(1, volume));
-  }
-
-  async next(): Promise<void> {
-    const store = usePlayerStore.getState();
-    const { queue, currentIndex, shuffle, repeatMode } = store;
-
+  async next(options: { auto?: boolean; crossfadeSeconds?: number } = {}): Promise<void> {
+    const { queue } = usePlayerStore.getState();
     if (queue.length === 0) return;
-
-    let nextIndex: number;
-
-    if (shuffle) {
-      // Pick random track (excluding current)
-      const availableIndices = queue
-        .map((_, i) => i)
-        .filter(i => i !== currentIndex);
-      if (availableIndices.length > 0) {
-        nextIndex = availableIndices[Math.floor(Math.random() * availableIndices.length)];
-      } else {
-        nextIndex = currentIndex;
-      }
-    } else if (currentIndex < queue.length - 1) {
-      nextIndex = currentIndex + 1;
-    } else if (repeatMode === 'all') {
-      nextIndex = 0;
-    } else {
-      // End of queue, stop
+    const nextIndex = this.peekNextIndex();
+    if (nextIndex < 0) {
+      // End of queue
       this.stop();
       return;
     }
-
-    await this.playAtIndex(nextIndex);
+    await this.playAtIndex(nextIndex, options);
   }
 
   async previous(): Promise<void> {
-    const store = usePlayerStore.getState();
-    const { queue, currentIndex, repeatMode } = store;
-
+    const { queue, currentIndex, repeatMode } = usePlayerStore.getState();
     if (queue.length === 0) return;
-
-    // If more than 3 seconds into track, restart it
     if (this.audio.currentTime > 3) {
       this.seek(0);
       return;
     }
-
-    let prevIndex: number;
-
     if (currentIndex > 0) {
-      prevIndex = currentIndex - 1;
+      await this.playAtIndex(currentIndex - 1);
     } else if (repeatMode === 'all') {
-      prevIndex = queue.length - 1;
+      await this.playAtIndex(queue.length - 1);
     } else {
-      // Beginning of queue, restart track
       this.seek(0);
-      return;
     }
-
-    await this.playAtIndex(prevIndex);
   }
 
-  // Skip to previous track without checking time (for swipe gestures)
   async skipToPrevious(): Promise<void> {
-    const store = usePlayerStore.getState();
-    const { queue, currentIndex, repeatMode } = store;
-
+    const { queue, currentIndex, repeatMode } = usePlayerStore.getState();
     if (queue.length === 0) return;
-
-    let prevIndex: number;
-
     if (currentIndex > 0) {
-      prevIndex = currentIndex - 1;
+      await this.playAtIndex(currentIndex - 1);
     } else if (repeatMode === 'all') {
-      prevIndex = queue.length - 1;
-    } else {
-      // Beginning of queue, do nothing or go to last if repeat all
-      return;
+      await this.playAtIndex(queue.length - 1);
     }
-
-    await this.playAtIndex(prevIndex);
   }
 
   private async handleTrackEnd(): Promise<void> {
-    const { repeatMode } = usePlayerStore.getState();
-
+    const { repeatMode, sleepAtEndOfTrack } = usePlayerStore.getState();
+    if (sleepAtEndOfTrack) {
+      this.finishSleep();
+      return;
+    }
     if (repeatMode === 'one') {
-      // Repeat current track. Intent set after seek(0): a seek at 'ended'
-      // can swap to the cached blob, which would overwrite it with "paused"
       this.seek(0);
       this.pendingAutoPlay = true;
-      await this.audio.play().catch(console.error);
+      await this.audio.play().catch((e) => log.warn('repeat-one play failed', e));
     } else {
-      // Go to next track
-      await this.next();
+      await this.next({ auto: true });
     }
   }
 
-  stop(): void {
-    this.audio.pause();
+  // ---------------------------------------------------------------------------
+  // Sleep timer
+  // ---------------------------------------------------------------------------
+
+  /** Pause after `minutes` (fading out), or at the end of the track with 'track'. */
+  setSleepTimer(minutes: number | 'track'): void {
+    const store = usePlayerStore.getState();
+    if (minutes === 'track') {
+      store.setSleepTimer(null, true);
+    } else {
+      store.setSleepTimer(Date.now() + minutes * 60_000, false);
+    }
+  }
+
+  cancelSleepTimer(): void {
+    usePlayerStore.getState().setSleepTimer(null, false);
+    this.setLevel(this.audio, 1);
+  }
+
+  private handleSleepTimer(): void {
+    const { sleepTimerEndsAt } = usePlayerStore.getState();
+    if (!sleepTimerEndsAt) return;
+    const remaining = (sleepTimerEndsAt - Date.now()) / 1000;
+    if (remaining <= 0) {
+      this.finishSleep();
+    } else if (remaining <= SLEEP_FADE_SECONDS && !this.outgoing) {
+      this.setLevel(this.audio, remaining / SLEEP_FADE_SECONDS);
+    }
+  }
+
+  private finishSleep(): void {
+    usePlayerStore.getState().setSleepTimer(null, false);
+    this.pause();
     this.audio.loop = false;
-    this.audio.currentTime = 0;
-    this.audio.src = '';
+    // Next play starts at full volume
+    this.setLevel(this.audio, 1);
+    useUiStore.getState().addToast(t('Sleep timer: playback paused'), 'info');
+  }
+
+  // ---------------------------------------------------------------------------
+  // Session persistence
+  // ---------------------------------------------------------------------------
+
+  private persistPosition(force: boolean): void {
+    const now = Date.now();
+    if (!force && now - this.lastPersistAt < 5000) return;
+    this.lastPersistAt = now;
+    if (!this.audio.src) return;
+    const position = this.audio.currentTime;
+    if (Number.isFinite(position)) usePlayerStore.getState().setSavedPosition(position);
+  }
+
+  stop(): void {
+    this.releaseOutgoing();
+    for (const el of this.elements) this.releaseElement(el);
     this.lastTimeupdatePos = 0;
-    this.revokeBlobUrl();
     this.cachedBlobForCurrentTrack = null;
     this.pendingAutoPlay = false;
     this.playbackIntent = false;
     this.transitioning = false;
-    this.preloaded = null;
-    this.preloadAttemptedFor = null;
+    this.prepared = null;
+    this.preparingFor = null;
+    this.plannedNextIndex = null;
     this.stopHealthMonitor();
     this.clearSwapLoadedListener();
     playbackCache.cancel();
     this.lastBufferedKey = '';
-    usePlayerStore.getState().setBufferedRanges([]);
-    usePlayerStore.getState().setCachedPercent(0);
-    usePlayerStore.getState().setState('stopped');
-    // Update MediaSession playback state
-    if (this.mediaSessionEnabled) {
-      navigator.mediaSession.playbackState = 'none';
-    }
+    const store = usePlayerStore.getState();
+    store.setBufferedRanges([]);
+    store.setCachedPercent(0);
+    store.setState('stopped');
+    store.setSavedPosition(0);
+    if (this.mediaSessionEnabled) navigator.mediaSession.playbackState = 'none';
   }
 
-  // Queue management
   async addToQueue(track: Track): Promise<void> {
     usePlayerStore.getState().addToQueue(track);
   }
@@ -1197,7 +1363,6 @@ class AudioPlayerService {
     usePlayerStore.getState().clearQueue();
   }
 
-  // Get current state
   get currentTime(): number {
     return this.audio.currentTime;
   }
@@ -1215,5 +1380,4 @@ class AudioPlayerService {
   }
 }
 
-// Singleton instance
 export const audioPlayer = new AudioPlayerService();

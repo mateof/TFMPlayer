@@ -1,4 +1,5 @@
-import * as mm from 'music-metadata';
+import { loadMusicMetadata } from '@/utils/musicMetadata';
+import type { IAudioMetadata } from 'music-metadata';
 import { cacheService } from '@/services/cache/CacheService';
 import { db, getApiCache, setApiCache } from '@/db/database';
 import type { CachedTrackEntity } from '@/db/database';
@@ -125,7 +126,7 @@ class AudioMetadataService {
   private async extractFromBlob(blob: Blob): Promise<AudioMetadata | null> {
     try {
       // parseBlob streams the file instead of copying it whole into memory
-      const metadata = await mm.parseBlob(blob);
+      const metadata = await (await loadMusicMetadata()).parseBlob(blob);
       return this.parseMetadata(metadata, blob.size);
     } catch (error) {
       console.error('Failed to extract metadata from blob:', error);
@@ -172,7 +173,7 @@ class AudioMetadataService {
           if (offset >= maxBytes) break;
         }
 
-        const metadata = await mm.parseBuffer(buffer, { size: fileSize });
+        const metadata = await (await loadMusicMetadata()).parseBuffer(buffer, { size: fileSize });
         return this.parseMetadata(metadata, fileSize);
       }
 
@@ -189,7 +190,7 @@ class AudioMetadataService {
         }
       }
 
-      const metadata = await mm.parseBuffer(uint8Array, { size: totalSize });
+      const metadata = await (await loadMusicMetadata()).parseBuffer(uint8Array, { size: totalSize });
       return this.parseMetadata(metadata, totalSize);
     } catch (error) {
       console.error('Failed to extract metadata from URL:', error);
@@ -197,7 +198,7 @@ class AudioMetadataService {
     }
   }
 
-  private parseMetadata(mm: mm.IAudioMetadata, fileSize?: number): AudioMetadata {
+  private parseMetadata(mm: IAudioMetadata, fileSize?: number): AudioMetadata {
     const format = mm.format;
     const common = mm.common;
 

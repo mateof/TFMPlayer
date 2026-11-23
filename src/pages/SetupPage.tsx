@@ -7,6 +7,7 @@ import { saveServerConfig } from '@/db/database';
 import { apiClient } from '@/services/api/client';
 import { useSettingsStore } from '@/stores/settingsStore';
 import { useUiStore } from '@/stores/uiStore';
+import { t } from '@/i18n';
 
 export function SetupPage() {
   const navigate = useNavigate();
@@ -22,7 +23,7 @@ export function SetupPage() {
 
   const handleTestConnection = async () => {
     if (!host || !apiKey) {
-      addToast('Please fill in all required fields', 'warning');
+      addToast(t('Please fill in all required fields'), 'warning');
       return;
     }
 
@@ -33,13 +34,13 @@ export function SetupPage() {
       const success = await apiClient.testConnection(host, parseInt(port), apiKey, useHttps);
       setConnectionStatus(success ? 'success' : 'error');
       if (success) {
-        addToast('Connection successful!', 'success');
+        addToast(t('Connection successful!'), 'success');
       } else {
-        addToast('Connection failed. Check your settings.', 'error');
+        addToast(t('Connection failed. Check your settings.'), 'error');
       }
     } catch {
       setConnectionStatus('error');
-      addToast('Connection failed. Check your settings.', 'error');
+      addToast(t('Connection failed. Check your settings.'), 'error');
     } finally {
       setTesting(false);
     }
@@ -47,12 +48,12 @@ export function SetupPage() {
 
   const handleSave = async () => {
     if (!host || !apiKey) {
-      addToast('Please fill in all required fields', 'warning');
+      addToast(t('Please fill in all required fields'), 'warning');
       return;
     }
 
     if (connectionStatus !== 'success') {
-      addToast('Please test the connection first', 'warning');
+      addToast(t('Please test the connection first'), 'warning');
       return;
     }
 
@@ -66,10 +67,10 @@ export function SetupPage() {
 
       setServerInfo(host, parseInt(port), useHttps);
       apiClient.clearCache();
-      addToast('Configuration saved!', 'success');
+      addToast(t('Configuration saved!'), 'success');
       navigate('/channels');
     } catch {
-      addToast('Failed to save configuration', 'error');
+      addToast(t('Failed to save configuration'), 'error');
     }
   };
 
@@ -82,21 +83,21 @@ export function SetupPage() {
             <Server className="w-10 h-10 text-emerald-500" />
           </div>
           <h1 className="text-2xl font-bold text-white mb-2">TFM Audio</h1>
-          <p className="text-slate-400">Configure your server connection</p>
+          <p className="text-slate-400">{t('Configure your server connection')}</p>
         </div>
 
         {/* Form */}
         <div className="space-y-4">
           <Input
-            label="Server Host"
-            placeholder="192.168.1.100 or example.com"
+            label={t('Server Host')}
+            placeholder={t('192.168.1.100 or example.com')}
             value={host}
             onChange={(e) => setHost(e.target.value)}
             icon={<Server className="w-4 h-4" />}
           />
 
           <Input
-            label="Port"
+            label={t('Port')}
             type="number"
             placeholder="5000"
             value={port}
@@ -105,9 +106,9 @@ export function SetupPage() {
           />
 
           <Input
-            label="API Key"
+            label={t('API Key')}
             type="password"
-            placeholder="Enter your API key"
+            placeholder={t('Enter your API key')}
             value={apiKey}
             onChange={(e) => setApiKey(e.target.value)}
             icon={<Key className="w-4 h-4" />}
@@ -122,8 +123,8 @@ export function SetupPage() {
                 <Unlock className="w-5 h-5 text-slate-400" />
               )}
               <div>
-                <p className="text-sm font-medium text-white">Use HTTPS</p>
-                <p className="text-xs text-slate-400">Enable secure connection</p>
+                <p className="text-sm font-medium text-white">{t('Use HTTPS')}</p>
+                <p className="text-xs text-slate-400">{t('Enable secure connection')}</p>
               </div>
             </div>
             <button
@@ -156,8 +157,8 @@ export function SetupPage() {
               )}
               <span className="text-sm">
                 {connectionStatus === 'success'
-                  ? 'Connection successful'
-                  : 'Connection failed'}
+                  ? t('Connection successful')
+                  : t('Connection failed')}
               </span>
             </div>
           )}
@@ -170,7 +171,7 @@ export function SetupPage() {
               loading={testing}
               className="flex-1"
             >
-              Test Connection
+              {t('Test Connection')}
             </Button>
             <Button
               variant="primary"
@@ -178,7 +179,7 @@ export function SetupPage() {
               disabled={connectionStatus !== 'success'}
               className="flex-1"
             >
-              Save & Continue
+              {t('Save & Continue')}
             </Button>
           </div>
         </div>
