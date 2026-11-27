@@ -171,6 +171,11 @@ export function SearchPage() {
                 {t('Searching local files needs a newer TelegramFileManager.')}
               </p>
             )}
+            {!!query.data?.failedChannels?.length && (
+              <p className="mx-4 mt-3 text-xs text-amber-300" role="status">
+                {t('Could not search in: {channels}', { channels: query.data.failedChannels.join(', ') })}
+              </p>
+            )}
             {query.data?.truncated && (
               <p className="mx-4 mt-3 text-xs text-amber-300">
                 {t('Too many matches: showing the first ones. Refine the search to see the rest.')}

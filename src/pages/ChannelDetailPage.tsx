@@ -142,7 +142,8 @@ export function ChannelDetailPage() {
         emptyHint={t('Try changing the filter or refreshing the channel')}
         manager={manager}
         headerActions={
-          <button
+          // Servers advertise the refresh; older ones only through the v1 stats
+          (features.has('channels.refresh') || stats?.canRefresh) && <button
             onClick={() => setShowRefreshDialog(true)}
             disabled={refreshRunning || !channelName}
             className="p-2 text-slate-400 hover:text-white transition-colors disabled:opacity-60"

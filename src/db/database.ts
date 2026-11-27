@@ -33,6 +33,9 @@ export interface CachedTrackEntity {
   // bitrate in kbps. Makes a failed transcode visible instead of silent.
   audioFormat?: string;
   audioBitrate?: number;
+  // ReplayGain from the tags (dB, and the linear peak), for volume levelling
+  replayGainDb?: number;
+  replayGainPeak?: number;
 }
 
 export interface OfflinePlaylistEntity {
@@ -310,12 +313,3 @@ export async function deleteApiCache(key: string): Promise<void> {
   await db.apiCache.delete(key);
 }
 
-// Cover art helpers
-export async function updateTrackCoverArt(trackId: string, coverArt: string): Promise<void> {
-  await db.cachedTracks.update(trackId, { coverArt });
-}
-
-export async function getTrackCoverArt(trackId: string): Promise<string | undefined> {
-  const track = await db.cachedTracks.get(trackId);
-  return track?.coverArt;
-}

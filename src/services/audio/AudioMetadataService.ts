@@ -3,6 +3,7 @@ import type { IAudioMetadata } from 'music-metadata';
 import { cacheService } from '@/services/cache/CacheService';
 import { db, getApiCache, setApiCache } from '@/db/database';
 import type { CachedTrackEntity } from '@/db/database';
+import { tagsFromMetadata } from '@/utils/audioTags';
 import { apiClient } from '@/services/api/client';
 
 export interface AudioMetadata {
@@ -28,6 +29,10 @@ export interface AudioMetadata {
 
   // Cover art
   coverArt?: string; // Base64 data URL
+
+  // ReplayGain from the tags (dB and linear peak)
+  replayGainDb?: number;
+  replayGainPeak?: number;
 
   // True when built from stored fields without parsing the file (background
   // mode): tags/cover are present but technical info may be missing
@@ -114,6 +119,8 @@ class AudioMetadataService {
       duration: track.duration,
       fileSize: track.fileSize,
       coverArt: track.coverArt,
+      replayGainDb: track.replayGainDb,
+      replayGainPeak: track.replayGainPeak,
       partial: true
     };
   }
@@ -134,6 +141,8 @@ class AudioMetadataService {
           album: metadata.album ?? track.album,
           duration: metadata.duration ?? track.duration,
           coverArt: metadata.coverArt ?? track.coverArt,
+          replayGainDb: metadata.replayGainDb ?? track.replayGainDb,
+          replayGainPeak: metadata.replayGainPeak ?? track.replayGainPeak,
           metadataExtracted: true
         });
       }
@@ -218,22 +227,13 @@ class AudioMetadataService {
   }
 
   private parseMetadata(mm: IAudioMetadata, fileSize?: number): AudioMetadata {
-    const format = mm.format;
-    const common = mm.common;
-
-    // Extract cover art
-    let coverArt: string | undefined;
-    if (common.picture && common.picture.length > 0) {
-      const pic = common.picture[0];
-      const base64 = this.arrayBufferToBase64(pic.data);
-      coverArt = `data:${pic.format};base64,${base64}`;
-    }
-
+    const { format, common } = mm;
+    const tags = tagsFromMetadata(mm);
     return {
       // Technical info
       format: format.container,
       codec: format.codec,
-      bitrate: format.bitrate ? Math.round(format.bitrate / 1000) : undefined, // Convert to kbps
+      bitrate: tags.audioBitrate,
       sampleRate: format.sampleRate,
       channels: format.numberOfChannels,
       bitsPerSample: format.bitsPerSample,
@@ -250,20 +250,11 @@ class AudioMetadataService {
       disk: common.disk,
       comment: common.comment?.map(c => typeof c === 'string' ? c : c.text).filter((c): c is string => !!c),
 
-      // Cover art
-      coverArt
+      coverArt: tags.coverArt,
+      replayGainDb: tags.replayGainDb,
+      replayGainPeak: tags.replayGainPeak
     };
   }
-
-  private arrayBufferToBase64(buffer: Uint8Array): string {
-    let binary = '';
-    const len = buffer.byteLength;
-    for (let i = 0; i < len; i++) {
-      binary += String.fromCharCode(buffer[i]);
-    }
-    return btoa(binary);
-  }
-
   // Clear metadata cache for a specific track
   clearCache(trackId: string): void {
     this.metadataCache.delete(trackId);
