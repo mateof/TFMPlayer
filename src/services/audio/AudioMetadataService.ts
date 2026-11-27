@@ -3,6 +3,7 @@ import type { IAudioMetadata } from 'music-metadata';
 import { cacheService } from '@/services/cache/CacheService';
 import { db, getApiCache, setApiCache } from '@/db/database';
 import type { CachedTrackEntity } from '@/db/database';
+import { apiClient } from '@/services/api/client';
 
 export interface AudioMetadata {
   // Technical info
@@ -31,21 +32,37 @@ export interface AudioMetadata {
   // True when built from stored fields without parsing the file (background
   // mode): tags/cover are present but technical info may be missing
   partial?: boolean;
+
+  // What the persisted entry was parsed from. Older entries have none: those
+  // read from the stream may have lost a cover that didn't fit the head read.
+  source?: 'blob' | 'url';
 }
+
+// The tags (and the embedded picture) live at the start of the file: a large
+// cover needs more than 256 KB
+const HEAD_BYTES = 512 * 1024;
 
 class AudioMetadataService {
   private metadataCache = new Map<string, AudioMetadata>();
+  private inflight = new Map<string, Promise<AudioMetadata | null>>();
 
-  async getMetadata(trackId: string, streamUrl: string, fileSize?: number): Promise<AudioMetadata | null> {
-    // Check cache first
-    if (this.metadataCache.has(trackId)) {
-      return this.metadataCache.get(trackId)!;
+  // Several views ask for the current track at once: they share one read
+  getMetadata(trackId: string, streamUrl: string, fileSize?: number): Promise<AudioMetadata | null> {
+    const cached = this.metadataCache.get(trackId);
+    if (cached) return Promise.resolve(cached);
+    let pending = this.inflight.get(trackId);
+    if (!pending) {
+      pending = this.loadMetadata(trackId, streamUrl, fileSize).finally(() => this.inflight.delete(trackId));
+      this.inflight.set(trackId, pending);
     }
+    return pending;
+  }
 
+  private async loadMetadata(trackId: string, streamUrl: string, fileSize?: number): Promise<AudioMetadata | null> {
     try {
       // Full metadata persisted from a previous parse: no file work at all
       const persisted = await getApiCache<AudioMetadata>(`trackmeta:${trackId}`);
-      if (persisted) {
+      if (persisted && (persisted.coverArt || persisted.source)) {
         this.metadataCache.set(trackId, persisted);
         return persisted;
       }
@@ -63,6 +80,7 @@ class AudioMetadataService {
         const metadata = await this.extractFromBlob(cachedTrack.blob);
         if (metadata) {
           metadata.fileSize = cachedTrack.fileSize;
+          metadata.source = 'blob';
           this.metadataCache.set(trackId, metadata);
           await this.persistMetadata(trackId, cachedTrack, metadata);
           return metadata;
@@ -74,6 +92,7 @@ class AudioMetadataService {
       if (!navigator.onLine) return null;
       const metadata = await this.extractFromUrl(streamUrl, fileSize);
       if (metadata) {
+        metadata.source = 'url';
         this.metadataCache.set(trackId, metadata);
         setApiCache(`trackmeta:${trackId}`, metadata).catch(() => {});
         return metadata;
@@ -136,26 +155,26 @@ class AudioMetadataService {
 
   private async extractFromUrl(url: string, fileSize?: number): Promise<AudioMetadata | null> {
     try {
-      // Fetch first 256KB to get headers and metadata
-      // Most metadata (ID3v2) is at the beginning of the file
+      // The stored stream URL has no key: the server answers 401 without it
+      const apiKey = await apiClient.getApiKey();
+      const auth: Record<string, string> = apiKey ? { 'X-API-Key': apiKey } : {};
+      // Fetch the head of the file, where the tags and the picture are
       const response = await fetch(url, {
-        headers: {
-          Range: 'bytes=0-262143' // First 256KB
-        }
+        headers: { ...auth, Range: `bytes=0-${HEAD_BYTES - 1}` }
       });
 
       if (!response.ok && response.status !== 206) {
         // If range request not supported, try to fetch small amount
-        const fullResponse = await fetch(url);
+        const fullResponse = await fetch(url, { headers: auth });
         if (!fullResponse.ok) return null;
 
-        // Read only first 256KB
+        // Read only the head
         const reader = fullResponse.body?.getReader();
         if (!reader) return null;
 
         const chunks: Uint8Array[] = [];
         let totalRead = 0;
-        const maxBytes = 262144;
+        const maxBytes = HEAD_BYTES;
 
         while (totalRead < maxBytes) {
           const { done, value } = await reader.read();
@@ -173,7 +192,7 @@ class AudioMetadataService {
           if (offset >= maxBytes) break;
         }
 
-        const metadata = await (await loadMusicMetadata()).parseBuffer(buffer, { size: fileSize });
+        const metadata = await (await loadMusicMetadata()).parseBuffer(buffer, { size: fileSize }, { skipPostHeaders: true });
         return this.parseMetadata(metadata, fileSize);
       }
 
@@ -190,7 +209,7 @@ class AudioMetadataService {
         }
       }
 
-      const metadata = await (await loadMusicMetadata()).parseBuffer(uint8Array, { size: totalSize });
+      const metadata = await (await loadMusicMetadata()).parseBuffer(uint8Array, { size: totalSize }, { skipPostHeaders: true });
       return this.parseMetadata(metadata, totalSize);
     } catch (error) {
       console.error('Failed to extract metadata from URL:', error);
