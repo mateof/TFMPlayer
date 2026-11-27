@@ -12,6 +12,8 @@ import { useSettingsStore } from '@/stores/settingsStore';
 import { playlistSyncService } from '@/services/sync/PlaylistSyncService';
 import { audioPlayer } from '@/services/audio/AudioPlayerService';
 import { storageService } from '@/services/storage/StorageService';
+import { startServerEvents } from '@/services/events/serverEvents';
+import { resumeService } from '@/services/player/ResumeService';
 import { queryClient, queryPersister, PERSIST_MAX_AGE, QUERY_CACHE_BUSTER } from '@/services/query/queryClient';
 import { t } from '@/i18n';
 
@@ -55,7 +57,13 @@ function AppContent() {
     playlistSyncService.start();
     playlistSyncService.downloadMissingTracks();
     storageService.autoClean();
-    return () => playlistSyncService.stop();
+    // Live events from the server (notifications, refresh progress, player data)
+    const stopServerEvents = startServerEvents();
+    void resumeService.load();
+    return () => {
+      playlistSyncService.stop();
+      stopServerEvents();
+    };
   }, [isConfigured]);
 
   if (checking) {

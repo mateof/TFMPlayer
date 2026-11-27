@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { channelsApi } from '@/services/api/channels.api';
 import { useUiStore } from '@/stores/uiStore';
 import { serverCapabilities } from '@/services/server/capabilities';
+import { eventsHub } from '@/services/events/hub';
 import type { ChannelRefreshOptions, ChannelRefreshProgress, ChannelRefreshResult } from '@/types/models';
 import { t } from '@/i18n';
 
@@ -46,6 +47,9 @@ export const useChannelRefreshStore = create<ChannelRefreshState>((set) => ({
 
 const OPTIONS_KEY = 'tfm.channelRefreshOptions';
 const POLL_INTERVAL_MS = 3000;
+// With the events hub connected, progress and the end arrive as events:
+// the status is only checked now and then, as a safety net
+const HUB_POLL_INTERVAL_MS = 15000;
 // The first status read can arrive before the server flags the scan as
 // running. Without a fresh result we wait this long before trusting "idle".
 const STARTUP_GRACE_MS = 15000;
@@ -116,7 +120,7 @@ async function pollUntilDone(channelId: string, previousFinishedAt: string | nul
 
   try {
     for (;;) {
-      await sleep(POLL_INTERVAL_MS);
+      await sleep(eventsHub.connected ? HUB_POLL_INTERVAL_MS : POLL_INTERVAL_MS);
       const job = store().jobs[channelId];
       if (!job || job.phase !== 'running') return; // dismissed
 
@@ -134,7 +138,7 @@ async function pollUntilDone(channelId: string, previousFinishedAt: string | nul
 
       if (running) {
         seenRunning = true;
-        if (await serverCapabilities.has('channels.refreshProgress')) {
+        if (!eventsHub.connected && (await serverCapabilities.has('channels.refreshProgress'))) {
           try {
             const progress = await channelsApi.getRefreshProgress(channelId);
             const current = store().jobs[channelId];
@@ -172,7 +176,8 @@ async function pollUntilDone(channelId: string, previousFinishedAt: string | nul
 function finish(channelId: string, phase: RefreshPhase, result: ChannelRefreshResult | null, error?: string) {
   const { jobs, setJob } = useChannelRefreshStore.getState();
   const job = jobs[channelId];
-  if (!job) return;
+  // Already reported (the hub event and the safety-net poll can both see the end)
+  if (!job || job.phase !== 'running') return;
   setJob({ ...job, phase, result, error });
 
   const { addToast } = useUiStore.getState();
@@ -230,3 +235,17 @@ export const channelRefreshService = {
     void pollUntilDone(channelId, previousFinishedAt);
   }
 };
+
+// Live updates from the events hub (servers with `events.hub`)
+eventsHub.on('ChannelRefreshProgress', (event: { channelId?: string; progress?: ChannelRefreshProgress | null }) => {
+  if (!event?.channelId) return;
+  const { jobs, setJob } = useChannelRefreshStore.getState();
+  const job = jobs[String(event.channelId)];
+  if (job && job.phase === 'running') setJob({ ...job, progress: event.progress ?? null });
+});
+
+eventsHub.on('ChannelRefreshed', (event: { channelId?: string; result?: ChannelRefreshResult | null }) => {
+  if (!event?.channelId) return;
+  const result = event.result ?? null;
+  finish(String(event.channelId), result?.failed ? 'failed' : 'done', result);
+});

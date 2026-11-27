@@ -3,11 +3,13 @@ import { cacheService } from '@/services/cache/CacheService';
 import { audioMetadataService } from '@/services/audio/AudioMetadataService';
 import { audioPlayer } from '@/services/audio/AudioPlayerService';
 import { usePlayerStore } from '@/stores/playerStore';
+import { thumbnailCover } from '@/services/cover/thumbnailCover';
 
 /**
  * Cover art of a track (null while unknown or when there is none): the one
  * stored with the download, else, for the track playing, the one embedded in
- * the head of the stream. The answer is tied to the id it was asked for, so a
+ * the head of the stream, else the thumbnail Telegram keeps for its message
+ * (`files.thumbnails`). The answer is tied to the id it was asked for, so a
  * slow read for the previous track never shows up on the next one.
  */
 export function useCoverArt(fileId: string | undefined): string | null {
@@ -22,9 +24,12 @@ export function useCoverArt(fileId: string | undefined): string | null {
       const track = usePlayerStore.getState().currentTrack;
       if (cancelled || !track || track.fileId !== fileId) return;
       const meta = await audioMetadataService.getMetadata(track.fileId, track.streamUrl, track.fileSize);
-      if (cancelled || !meta?.coverArt) return;
-      setCover({ id: fileId, art: meta.coverArt });
-      audioPlayer.updateCoverArt(meta.coverArt);
+      if (cancelled) return;
+      // No embedded picture (or tags not readable): Telegram's thumbnail
+      const art = meta?.coverArt ?? (await thumbnailCover(track));
+      if (cancelled || !art) return;
+      setCover({ id: fileId, art });
+      audioPlayer.updateCoverArt(art);
     };
 
     // With the screen off the service doesn't parse files: retry once visible

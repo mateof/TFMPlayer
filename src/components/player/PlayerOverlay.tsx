@@ -35,6 +35,7 @@ import { cacheService } from '@/services/cache/CacheService';
 import { AudioEqualizer } from './AudioEqualizer';
 import { QueueList } from './QueueList';
 import { SleepTimerButton } from './SleepTimerButton';
+import { PlaybackRateButton } from './PlaybackRateButton';
 import { useMediaQuery, DESKTOP_QUERY } from '@/hooks/useMediaQuery';
 import { useCoverArt } from '@/hooks/useCoverArt';
 import { useSeekDrag } from '@/hooks/useSeekDrag';
@@ -434,6 +435,7 @@ export function PlayerOverlay() {
               {queue.length > 1 && <span className="text-slate-500"> · {t('{n} of {total}', { n: currentIndex + 1, total: queue.length })}</span>}
             </p>
           </div>
+          <PlaybackRateButton size="lg" />
           <SleepTimerButton size="lg" />
           <button
             onClick={() => setShowPlaylistPicker(true)}
@@ -673,6 +675,7 @@ export function PlayerOverlay() {
               </p>
             </div>
             <div className="flex items-center gap-1">
+              <PlaybackRateButton />
               <SleepTimerButton />
               <button
                 onClick={toggleEqualizer}

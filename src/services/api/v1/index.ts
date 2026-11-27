@@ -15,6 +15,7 @@ import { createLocalApi } from './modules/local';
 import { createSharesApi } from './modules/shares';
 import { createTransfersApi } from './modules/transfers';
 import { createSearchApi } from './modules/search';
+import { createPlayerApi } from './modules/player';
 
 export * from './http';
 export type * from './types/files';
@@ -23,6 +24,7 @@ export type * from './types/shares';
 export type * from './types/transfers';
 export type * from './types/channels';
 export type * from './modules/search';
+export type * from './modules/player';
 
 /** The v1 modules this app uses, on one HTTP client. */
 export function createApiClient(options: HttpClientOptions = {}) {
@@ -33,7 +35,8 @@ export function createApiClient(options: HttpClientOptions = {}) {
     local: createLocalApi(http),
     transfers: createTransfersApi(http),
     shares: createSharesApi(http),
-    search: createSearchApi(http)
+    search: createSearchApi(http),
+    player: createPlayerApi(http)
   };
 }
 
