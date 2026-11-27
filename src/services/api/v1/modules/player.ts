@@ -35,6 +35,7 @@ export interface ApiHistoryEntryDto {
   id: string;
   track: ApiPlayerTrackDto;
   playedAt: string;
+  positionSeconds?: number | null;
   completed: boolean;
 }
 
@@ -54,6 +55,8 @@ export interface ApiResumePointDto {
   positionSeconds: number;
   durationSeconds: number;
   updatedAt: string;
+  /** PUT only: the position was at the end, so the point was deleted. */
+  finished?: boolean;
 }
 
 /** Payload of the events hub's `PlayerDataChanged` message. */
@@ -81,7 +84,7 @@ export function createPlayerApi(http: HttpClient) {
     clearHistory: () => http.delete<void>(`${base}/history`),
 
     saveResume: (body: { track: ApiPlayerTrackDto; positionSeconds: number; durationSeconds: number }) =>
-      http.put<ApiResumePointDto | null>(`${base}/resume`, body),
+      http.put<ApiResumePointDto>(`${base}/resume`, body),
     resume: (key: string, signal?: AbortSignal) => http.get<ApiResumePointDto>(`${base}/resume`, { query: { key }, signal }),
     resumeList: (limit = 50, signal?: AbortSignal) =>
       http.get<ApiResumePointDto[]>(`${base}/resume/list`, { query: { limit }, signal }),

@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Plus, ListMusic, ChevronRight, Trash2, CloudOff, WifiOff, RefreshCw, Sparkles, History } from 'lucide-react';
+import { Plus, ListMusic, ChevronRight, Trash2, CloudOff, WifiOff, RefreshCw, Sparkles, History, Heart } from 'lucide-react';
 import { Header, HeaderAction } from '@/components/layout/Header';
 import { Button } from '@/components/common/Button';
 import { Input } from '@/components/common/Input';
@@ -170,6 +170,18 @@ export function PlaylistsPage() {
               <History className="w-5 h-5 text-white" />
             </div>
             <span className="flex-1 text-sm text-white">{t('Recently played and most played')}</span>
+            <ChevronRight className="w-4 h-4 text-slate-500" aria-hidden />
+          </button>
+        </div>
+        <div className="px-4 pt-2 lg:hidden">
+          <button
+            onClick={() => navigate('/favorite-tracks')}
+            className="w-full flex items-center gap-3 p-3 rounded-xl bg-slate-800/70 hover:bg-slate-800 text-left"
+          >
+            <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-rose-500 to-pink-500 flex items-center justify-center shrink-0" aria-hidden>
+              <Heart className="w-5 h-5 text-white" fill="currentColor" />
+            </div>
+            <span className="flex-1 text-sm text-white">{t('Favourite tracks')}</span>
             <ChevronRight className="w-4 h-4 text-slate-500" aria-hidden />
           </button>
         </div>

@@ -17,7 +17,26 @@ const server: Record<string, string> = {
   'Downloads, uploads and errors reported by the server': 'Descargas, subidas y errores que avisa el servidor',
   'Needs a newer TelegramFileManager': 'Necesita un TelegramFileManager más reciente',
   'Resuming at {time}': 'Continuando en {time}',
-  'Playback speed: {rate}': 'Velocidad: {rate}'
+  'Playback speed: {rate}': 'Velocidad: {rate}',
+  'Favourite tracks': 'Pistas favoritas',
+  'Shared with the server': 'Compartidas con el servidor',
+  'On this device': 'En este dispositivo',
+  'Could not load the favourite tracks': 'No se pudieron cargar las pistas favoritas',
+  'Mark tracks with the heart in the player and they show up here.': 'Marca pistas con el corazón en el reproductor y aparecerán aquí.',
+  'Remove from favourite tracks': 'Quitar de pistas favoritas',
+  'Add to favourite tracks': 'Añadir a pistas favoritas',
+  'Download to the server': 'Descargar en el servidor',
+  'Download the playlist to the server?': '¿Descargar la playlist en el servidor?',
+  'The server saves its {count} tracks in the local folder "{folder}". Progress shows in Server transfers.': 'El servidor guardará sus {count} pistas en la carpeta local «{folder}». El progreso aparece en Transferencias del servidor.',
+  'The server is downloading the playlist': 'El servidor está descargando la playlist',
+  'Chat audio': 'Audios del chat',
+  'Chat audio: straight from Telegram': 'Audios del chat: directamente de Telegram',
+  'This server cannot play the chat history yet': 'Este servidor aún no puede reproducir el historial del chat',
+  'Search the chat...': 'Buscar en el chat...',
+  'Search the chat audio': 'Buscar en los audios del chat',
+  'Straight from Telegram, including what the index does not have yet.': 'Directamente de Telegram, incluido lo que el índice aún no tiene.',
+  'Could not read the chat history': 'No se pudo leer el historial del chat',
+  'No audio in this chat': 'No hay audios en este chat'
 };
 
 export default server;

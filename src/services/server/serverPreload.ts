@@ -3,6 +3,7 @@ import { cacheService } from '@/services/cache/CacheService';
 import { serverCapabilities } from '@/services/server/capabilities';
 import type { Track } from '@/types/models';
 import { log } from '@/utils/logger';
+import { isMessageTrack } from '@/utils/messageTracks';
 
 // Tracks already asked for this session (the server keeps them in its cache)
 const requested = new Set<string>();
@@ -15,7 +16,8 @@ const MAX_REMEMBERED = 500;
  * without the feature are skipped. Never throws.
  */
 export async function preloadOnServer(track: Track | undefined): Promise<void> {
-  if (!track || track.isLocalFile || !track.channelId || !track.fileId) return;
+  // Message attachments are not in the index: nothing the preload can address
+  if (!track || track.isLocalFile || !track.channelId || !track.fileId || isMessageTrack(track)) return;
   const key = `${track.channelId}:${track.fileId}`;
   if (requested.has(key)) return;
   try {

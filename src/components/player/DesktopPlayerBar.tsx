@@ -8,6 +8,7 @@ import { useUiStore } from '@/stores/uiStore';
 import { useCoverArt } from '@/hooks/useCoverArt';
 import { useSeekDrag } from '@/hooks/useSeekDrag';
 import { SleepTimerButton } from './SleepTimerButton';
+import { FavoriteButton } from './FavoriteButton';
 import { formatDuration } from '@/utils/format';
 import { getPreloadedRanges } from '@/utils/preload';
 import { t } from '@/i18n';
@@ -143,6 +144,7 @@ export function DesktopPlayerBar() {
 
       {/* Volume + panels */}
       <div className="flex items-center justify-end gap-2">
+        <FavoriteButton track={currentTrack} />
         <SleepTimerButton placement="up" />
         <button onClick={toggleMute} className={`${iconButton} text-slate-400 hover:text-white`} title={t('Mute')}>
           {volume === 0 ? <VolumeX className="w-5 h-5" /> : <Volume2 className="w-5 h-5" />}

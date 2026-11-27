@@ -14,6 +14,7 @@ import { audioPlayer } from '@/services/audio/AudioPlayerService';
 import { storageService } from '@/services/storage/StorageService';
 import { startServerEvents } from '@/services/events/serverEvents';
 import { resumeService } from '@/services/player/ResumeService';
+import { favoritesService } from '@/services/player/FavoritesService';
 import { queryClient, queryPersister, PERSIST_MAX_AGE, QUERY_CACHE_BUSTER } from '@/services/query/queryClient';
 import { t } from '@/i18n';
 
@@ -34,6 +35,8 @@ const StoragePage = named(() => import('@/pages/StoragePage'), 'StoragePage');
 const SettingsPage = named(() => import('@/pages/SettingsPage'), 'SettingsPage');
 const SearchPage = named(() => import('@/pages/SearchPage'), 'SearchPage');
 const HistoryPage = named(() => import('@/pages/HistoryPage'), 'HistoryPage');
+const ChannelMessagesPage = named(() => import('@/pages/ChannelMessagesPage'), 'ChannelMessagesPage');
+const FavoriteTracksPage = named(() => import('@/pages/FavoriteTracksPage'), 'FavoriteTracksPage');
 const TransfersPage = named(() => import('@/pages/TransfersPage'), 'TransfersPage');
 const SharesPage = named(() => import('@/pages/SharesPage'), 'SharesPage');
 const SharedCollectionPage = named(() => import('@/pages/SharedCollectionPage'), 'SharedCollectionPage');
@@ -60,6 +63,7 @@ function AppContent() {
     // Live events from the server (notifications, refresh progress, player data)
     const stopServerEvents = startServerEvents();
     void resumeService.load();
+    void favoritesService.load();
     return () => {
       playlistSyncService.stop();
       stopServerEvents();
@@ -84,12 +88,14 @@ function AppContent() {
             <Route element={<AppShell />}>
               <Route path="/channels" element={<ChannelsPage />} />
               <Route path="/channels/:id" element={<ChannelDetailPage />} />
+              <Route path="/channels/:id/messages" element={<ChannelMessagesPage />} />
               <Route path="/local" element={<LocalFilesPage />} />
               <Route path="/search" element={<SearchPage />} />
               <Route path="/playlists" element={<PlaylistsPage />} />
               <Route path="/playlists/:id" element={<PlaylistDetailPage />} />
               <Route path="/smart/:id" element={<SmartPlaylistPage />} />
               <Route path="/history" element={<HistoryPage />} />
+              <Route path="/favorite-tracks" element={<FavoriteTracksPage />} />
               <Route path="/downloads" element={<DownloadsPage />} />
               <Route path="/storage" element={<StoragePage />} />
               <Route path="/transfers" element={<TransfersPage />} />

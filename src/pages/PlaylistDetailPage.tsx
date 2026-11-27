@@ -2,8 +2,11 @@ import { useState, useEffect, useCallback, useRef, useLayoutEffect } from 'react
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { useQueryClient } from '@tanstack/react-query';
 import { useParams } from 'react-router-dom';
-import { Play, Shuffle, Download, Music, Trash2, Check, CloudOff, Cloud, WifiOff, GripVertical, ChevronUp } from 'lucide-react';
-import { Header } from '@/components/layout/Header';
+import { Play, Shuffle, Download, Music, Trash2, Check, CloudOff, Cloud, WifiOff, GripVertical, ChevronUp, ServerCog } from 'lucide-react';
+import { Header, HeaderAction } from '@/components/layout/Header';
+import { useServerFeatures } from '@/hooks/useServerFeatures';
+import { downloadPlaylistToServer } from '@/services/playlists/serverDownload';
+import { operationErrorMessage } from '@/hooks/useFileOperations';
 import { Button } from '@/components/common/Button';
 import { LoadingScreen } from '@/components/common/Spinner';
 import { TrackContextMenu } from '@/components/common/TrackContextMenu';
@@ -36,6 +39,7 @@ export function PlaylistDetailPage() {
   const activeDownloads = useDownloadStore((state) => state.activeDownloads);
   const completedDownloads = useDownloadStore((state) => state.completedDownloads);
   const clearCompleted = useDownloadStore((state) => state.clearCompleted);
+  const { features } = useServerFeatures();
 
   const [loading, setLoading] = useState(true);
   const [playlist, setPlaylist] = useState<PlaylistDetail | null>(null);
@@ -464,6 +468,24 @@ export function PlaylistDetailPage() {
     }
   };
 
+  // The server downloads every track into its local storage (folder named
+  // after the playlist); progress is on the transfers screen
+  const handleDownloadToServer = async () => {
+    if (!playlist) return;
+    const ok = await confirmDialog({
+      title: t('Download the playlist to the server?'),
+      message: t('The server saves its {count} tracks in the local folder "{folder}". Progress shows in Server transfers.', { count: playlist.tracks.length, folder: playlist.name }),
+      confirmLabel: t('Download')
+    });
+    if (!ok) return;
+    try {
+      await downloadPlaylistToServer(playlist.id, playlist.name);
+      addToast(t('The server is downloading the playlist'), 'success');
+    } catch (error) {
+      addToast(operationErrorMessage(error), 'error');
+    }
+  };
+
   if (loading) {
     return (
       <div className="flex flex-col min-h-full">
@@ -494,7 +516,20 @@ export function PlaylistDetailPage() {
 
   return (
     <div className="relative flex flex-col h-full overflow-hidden">
-      <Header title={playlist.name} subtitle={playlist.description} showBack />
+      <Header
+        title={playlist.name}
+        subtitle={playlist.description}
+        showBack
+        actions={
+          features.has('files.content') && !isOfflineMode && playlist.tracks.length > 0 ? (
+            <HeaderAction
+              icon={<ServerCog className="w-5 h-5" aria-hidden />}
+              onClick={handleDownloadToServer}
+              label={t('Download to the server')}
+            />
+          ) : undefined
+        }
+      />
 
       {/* Scrollable content */}
       <div ref={scrollContainerRef} className="relative flex-1 overflow-y-auto">

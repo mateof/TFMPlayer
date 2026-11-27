@@ -1,6 +1,12 @@
 import { db, type DownloadQueueEntity } from '@/db/database';
 import { cacheService } from '@/services/cache/CacheService';
-import { apiClient, buildTranscodedUrlSync, buildLocalTranscodedUrlSync } from '@/services/api/client';
+import {
+  apiClient,
+  buildTranscodedUrlSync,
+  buildLocalTranscodedUrlSync,
+  buildV1TranscodedUrlSync,
+  buildV1LocalTranscodedUrlSync
+} from '@/services/api/client';
 import { useSettingsStore } from '@/stores/settingsStore';
 import { useUiStore } from '@/stores/uiStore';
 import type { Track } from '@/types/models';
@@ -327,8 +333,11 @@ class DownloadManager {
       const localPath = item.filePath ?? this.extractLocalPath(item.streamUrl);
 
       // Local files can only be transcoded by servers that say so (older ones
-      // answered 404 and we found out by failing)
-      const canTranscodeLocal = await serverCapabilities.has('stream.localTranscode');
+      // answered 404 and we found out by failing). Servers with v1 transcoding
+      // (audio.transcode) get the v1 endpoints.
+      const caps = await serverCapabilities.get();
+      const v1Transcode = caps.features.has('audio.transcode');
+      const canTranscodeLocal = v1Transcode || caps.features.has('stream.localTranscode');
       let transcoded =
         downloadFormat !== 'original' &&
         !alreadyTargetFormat &&
@@ -337,8 +346,12 @@ class DownloadManager {
       let downloadUrl = item.streamUrl;
       if (transcoded) {
         downloadUrl = isChannelFile
-          ? buildTranscodedUrlSync(item.channelId, item.trackId, downloadFormat, downloadBitrate, item.fileName)
-          : buildLocalTranscodedUrlSync(localPath!, downloadFormat, downloadBitrate);
+          ? v1Transcode
+            ? buildV1TranscodedUrlSync(item.channelId, item.trackId, downloadFormat, downloadBitrate)
+            : buildTranscodedUrlSync(item.channelId, item.trackId, downloadFormat, downloadBitrate, item.fileName)
+          : v1Transcode
+            ? buildV1LocalTranscodedUrlSync(localPath!, downloadFormat, downloadBitrate)
+            : buildLocalTranscodedUrlSync(localPath!, downloadFormat, downloadBitrate);
       }
 
       // First request to check file size and if server returns partial content

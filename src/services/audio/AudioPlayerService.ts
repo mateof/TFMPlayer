@@ -1,6 +1,8 @@
 import { usePlayerStore } from '@/stores/playerStore';
 import { db } from '@/db/database';
-import { buildStreamUrlWithAuth, buildLocalStreamUrlWithAuth } from '@/services/api/client';
+import { apiClient, buildStreamUrlWithAuth, buildLocalStreamUrlWithAuth } from '@/services/api/client';
+import { appendApiKey } from '@/services/api/v1/http';
+import { isMessageTrack } from '@/utils/messageTracks';
 import { cacheService } from '@/services/cache/CacheService';
 import { playbackCache } from '@/services/cache/PlaybackCacheService';
 import { loadNextQueuePage } from '@/services/queue/QueueSourceService';
@@ -787,9 +789,12 @@ class AudioPlayerService {
     } catch (e) {
       log.warn('Error checking cache:', e);
     }
-    const url = track.isLocalFile
-      ? await buildLocalStreamUrlWithAuth(track.filePath)
-      : await buildStreamUrlWithAuth(track.channelId, track.fileId, track.fileName);
+    // Attachments of messages not in the index play through the v1 endpoint
+    const url = isMessageTrack(track)
+      ? appendApiKey(track.streamUrl, await apiClient.getApiKey())
+      : track.isLocalFile
+        ? await buildLocalStreamUrlWithAuth(track.filePath)
+        : await buildStreamUrlWithAuth(track.channelId, track.fileId, track.fileName);
     return { blob: null, url };
   }
 

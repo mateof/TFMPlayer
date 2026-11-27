@@ -3,6 +3,7 @@ import type { ApiPlayerTrackDto } from '@/services/api/v1';
 import { serverCapabilities } from '@/services/server/capabilities';
 import { useSettingsStore } from '@/stores/settingsStore';
 import type { Track } from '@/types/models';
+import { messageContentUrl, parseMessageTrackId } from '@/utils/messageTracks';
 
 /** Same key the server computes: `channel:{channelId}:{fileId}` or `local:{path}`. */
 export function trackKey(track: Pick<Track, 'isLocalFile' | 'filePath' | 'channelId' | 'fileId'>): string {
@@ -38,6 +39,7 @@ export function fromApiTrack(dto: ApiPlayerTrackDto): Track {
   const fileId = isLocal ? path : dto.fileId ?? '';
   // Local tracks are addressed by their path, like localFileToTrack does
   const channelId = isLocal ? 'local' : dto.channelId ?? '';
+  const message = isLocal ? null : parseMessageTrackId(fileId);
   const ext = dto.fileName.includes('.') ? dto.fileName.slice(dto.fileName.lastIndexOf('.')) : '';
   return {
     fileId,
@@ -50,7 +52,12 @@ export function fromApiTrack(dto: ApiPlayerTrackDto): Track {
     order: 0,
     dateAdded: '',
     isLocalFile: isLocal,
-    streamUrl: isLocal ? buildLocalStreamUrlSync(path) : buildStreamUrlSync(channelId, fileId, dto.fileName),
+    streamUrl: isLocal
+      ? buildLocalStreamUrlSync(path)
+      : message
+        ? messageContentUrl(message.channelId, message.messageId)
+        : buildStreamUrlSync(channelId, fileId, dto.fileName),
+    messageId: message?.messageId,
     duration: dto.duration ?? undefined,
     title: dto.title ?? dto.fileName.replace(/\.[^/.]+$/, ''),
     artist: dto.artist ?? undefined,

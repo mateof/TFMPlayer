@@ -3,7 +3,7 @@ import { NavLink } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import {
   Radio, HardDrive, ListMusic, Download, Settings, Star, Loader2, AudioLines, Search, ListPlus, History,
-  ServerCog, Share2
+  ServerCog, Share2, Heart
 } from 'lucide-react';
 import { useServerFeatures } from '@/hooks/useServerFeatures';
 import { useDownloadStore } from '@/services/download/DownloadManager';
@@ -23,6 +23,7 @@ const navItems: { to: string; icon: typeof Radio; label: string; feature?: strin
   { to: '/local', icon: HardDrive, label: t('Local files') },
   { to: '/shares', icon: Share2, label: t('Shared collections'), feature: 'shares.browse' },
   { to: '/playlists', icon: ListMusic, label: t('Playlists') },
+  { to: '/favorite-tracks', icon: Heart, label: t('Favourite tracks') },
   { to: '/history', icon: History, label: t('History') },
   { to: '/downloads', icon: Download, label: t('Downloads') },
   { to: '/transfers', icon: ServerCog, label: t('Server transfers') },
