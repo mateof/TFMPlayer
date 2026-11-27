@@ -37,6 +37,7 @@ import { QueueList } from './QueueList';
 import { SleepTimerButton } from './SleepTimerButton';
 import { useMediaQuery, DESKTOP_QUERY } from '@/hooks/useMediaQuery';
 import { useCoverArt } from '@/hooks/useCoverArt';
+import { useSeekDrag } from '@/hooks/useSeekDrag';
 import { t } from '@/i18n';
 
 // Swipe gesture hook
@@ -254,9 +255,9 @@ export function PlayerOverlay() {
   }, [setPlayerExpanded, currentTrack]);
 
 
-  const handleSeek = (e: React.ChangeEvent<HTMLInputElement>) => {
-    seek(parseFloat(e.target.value));
-  };
+  // Seeks when the drag ends, not on every step of it
+  const seekBar = useSeekDrag(position, seek);
+  const shownPosition = seekBar.value;
 
   const handleVolumeChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setVolume(parseFloat(e.target.value));
@@ -481,22 +482,21 @@ export function PlayerOverlay() {
                       style={{ left: `${(range.start / duration) * 100}%`, width: `${((range.end - range.start) / duration) * 100}%` }}
                     />
                   ))}
-                  <div className="absolute inset-y-0 left-0 bg-emerald-400" style={{ width: `${duration > 0 ? (position / duration) * 100 : 0}%` }} />
+                  <div className="absolute inset-y-0 left-0 bg-emerald-400" style={{ width: `${duration > 0 ? (shownPosition / duration) * 100 : 0}%` }} />
                 </div>
                 <input
                   type="range"
                   min={0}
                   max={duration || 100}
                   step="any"
-                  value={position}
-                  onChange={handleSeek}
+                  {...seekBar.inputProps}
                   aria-label={t('Seek')}
                   className="w-full relative track-transparent"
                 />
               </div>
               <div className="flex justify-between mt-1.5 text-xs text-slate-400 tabular-nums">
-                <span>{formatDuration(position)}</span>
-                <span>-{formatDuration(Math.max(0, duration - position))}</span>
+                <span>{formatDuration(shownPosition)}</span>
+                <span>-{formatDuration(Math.max(0, duration - shownPosition))}</span>
               </div>
             </div>
 
@@ -872,20 +872,21 @@ export function PlayerOverlay() {
                 ))}
                 <div
                   className="absolute inset-y-0 left-0 bg-emerald-500"
-                  style={{ width: `${duration > 0 ? (position / duration) * 100 : 0}%` }}
+                  style={{ width: `${duration > 0 ? (shownPosition / duration) * 100 : 0}%` }}
                 />
               </div>
               <input
                 type="range"
                 min={0}
                 max={duration || 100}
-                value={position}
-                onChange={handleSeek}
+                step="any"
+                aria-label={t('Seek')}
+                {...seekBar.inputProps}
                 className="w-full relative track-transparent"
               />
             </div>
             <div className="flex justify-between mt-2 text-xs text-slate-400 tabular-nums">
-              <span>{formatDuration(position)}</span>
+              <span>{formatDuration(shownPosition)}</span>
               <span>{formatDuration(duration)}</span>
             </div>
           </div>

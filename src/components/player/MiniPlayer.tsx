@@ -5,6 +5,7 @@ import { getPreloadedRanges } from '@/utils/preload';
 import { useUiStore } from '@/stores/uiStore';
 import { useState, useRef } from 'react';
 import { useCoverArt } from '@/hooks/useCoverArt';
+import { useSeekDrag } from '@/hooks/useSeekDrag';
 import { useSettingsStore } from '@/stores/settingsStore';
 import { t } from '@/i18n';
 
@@ -70,8 +71,11 @@ export function MiniPlayer() {
 
   const coverArt = useCoverArt(currentTrack?.fileId);
   const ambientBackground = useSettingsStore((s) => s.ambientBackground);
+  // Seeks when the finger is lifted, not on every step of the drag
+  const seekBar = useSeekDrag(position, seek);
 
   if (!currentTrack) return null;
+  const shownProgress = duration > 0 ? (seekBar.value / duration) * 100 : progress;
 
   const handlePlayPause = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -81,10 +85,6 @@ export function MiniPlayer() {
   const handleNext = (e: React.MouseEvent) => {
     e.stopPropagation();
     next();
-  };
-
-  const handleSeek = (e: React.ChangeEvent<HTMLInputElement>) => {
-    seek(parseFloat(e.target.value));
   };
 
   const handleOpenPlayer = () => {
@@ -140,7 +140,7 @@ export function MiniPlayer() {
             <p className="text-xs text-slate-300/80 truncate">
               {currentTrack.artist || currentTrack.channelName}
               <span className="hidden min-[400px]:inline tabular-nums text-slate-400">
-                {' · '}{formatDuration(position)} / {formatDuration(duration)}
+                {' · '}{formatDuration(seekBar.value)} / {formatDuration(duration)}
               </span>
             </p>
           </div>
@@ -182,15 +182,14 @@ export function MiniPlayer() {
           ))}
           <div
             className="absolute inset-y-0 left-0 bg-emerald-400 transition-[width] duration-200 pointer-events-none"
-            style={{ width: `${progress}%` }}
+            style={{ width: `${shownProgress}%` }}
           />
           <input
             type="range"
             min={0}
             max={duration || 100}
             step="any"
-            value={position}
-            onChange={handleSeek}
+            {...seekBar.inputProps}
             onClick={(e) => e.stopPropagation()}
             aria-label={t('Seek')}
             className="absolute left-0 right-0 -top-3 -bottom-1 h-auto w-full opacity-0 cursor-pointer touch-manipulation"
