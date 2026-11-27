@@ -2,7 +2,8 @@ import { describe, expect, it, vi } from 'vitest';
 
 vi.mock('@/services/api/client', () => ({
   buildStreamUrlSync: (channelId: string, fileId: string) => `http://server/stream/tfm/${channelId}/${fileId}`,
-  buildLocalStreamUrlSync: (path: string) => `http://server/stream/local?path=${path}`
+  buildLocalStreamUrlSync: (path: string) => `http://server/stream/local?path=${path}`,
+  apiClient: { onReset: () => {}, getBaseUrl: () => 'http://server', getApiKey: async () => '' }
 }));
 
 import { fileToTrack, filterFilesByExtension, getApiFilter } from './channelTracks';
