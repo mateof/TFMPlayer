@@ -1,11 +1,18 @@
 import { db, type DownloadQueueEntity } from '@/db/database';
 import { cacheService } from '@/services/cache/CacheService';
-import { apiClient, buildTranscodedUrlSync, buildLocalTranscodedUrlSync } from '@/services/api/client';
+import {
+  apiClient,
+  buildTranscodedUrlSync,
+  buildLocalTranscodedUrlSync,
+  buildV1TranscodedUrlSync,
+  buildV1LocalTranscodedUrlSync
+} from '@/services/api/client';
 import { useSettingsStore } from '@/stores/settingsStore';
 import { useUiStore } from '@/stores/uiStore';
 import type { Track } from '@/types/models';
 import { create } from 'zustand';
-import { loadMusicMetadata } from '@/utils/musicMetadata';
+import { readBlobTags } from '@/utils/audioTags';
+import { serverCapabilities } from '@/services/server/capabilities';
 import { log } from '@/utils/logger';
 import { t } from '@/i18n';
 
@@ -51,62 +58,6 @@ class DownloadManager {
   private isProcessing = false;
   private abortControllers = new Map<string, AbortController>();
 
-  // Extract metadata from audio blob
-  private async extractMetadata(blob: Blob): Promise<{
-    title?: string;
-    artist?: string;
-    album?: string;
-    duration?: number;
-    coverArt?: string;
-    audioFormat?: string;
-    audioBitrate?: number;
-  }> {
-    try {
-      const buffer = await blob.arrayBuffer();
-      const uint8Array = new Uint8Array(buffer);
-      const metadata = await (await loadMusicMetadata()).parseBuffer(uint8Array, {
-        mimeType: blob.type || 'audio/mpeg',
-        size: blob.size
-      });
-
-      let coverArt: string | undefined;
-      if (metadata.common.picture && metadata.common.picture.length > 0) {
-        const pic = metadata.common.picture[0];
-        const base64 = this.arrayBufferToBase64(pic.data);
-        coverArt = `data:${pic.format};base64,${base64}`;
-      }
-
-      return {
-        title: metadata.common.title,
-        artist: metadata.common.artist,
-        album: metadata.common.album,
-        duration: metadata.format.duration,
-        coverArt,
-        audioFormat: this.formatLabel(metadata.format.container, metadata.format.codec),
-        audioBitrate: metadata.format.bitrate
-          ? Math.round(metadata.format.bitrate / 1000)
-          : undefined
-      };
-    } catch (error) {
-      console.warn('Failed to extract metadata:', error);
-      return {};
-    }
-  }
-
-  // Short, human-readable codec label from what the file actually contains
-  private formatLabel(container?: string, codec?: string): string | undefined {
-    const value = `${codec ?? ''} ${container ?? ''}`.toUpperCase();
-    if (!value.trim()) return undefined;
-    if (value.includes('AAC')) return 'AAC';
-    if (value.includes('LAYER 3') || value.includes('MP3')) return 'MP3';
-    if (value.includes('FLAC')) return 'FLAC';
-    if (value.includes('OPUS')) return 'OPUS';
-    if (value.includes('VORBIS')) return 'OGG';
-    if (value.includes('PCM') || value.includes('WAVE')) return 'WAV';
-    if (value.includes('ALAC')) return 'ALAC';
-    return (codec || container)!.split(/[\s/]/)[0].slice(0, 8).toUpperCase();
-  }
-
   // Surface a failed transcode in the UI, but only once per session so a
   // 200-track playlist doesn't produce 200 toasts
   private transcodeWarningShown = false;
@@ -131,16 +82,6 @@ class DownloadManager {
     const query = streamUrl.split('?')[1];
     if (!query) return undefined;
     return new URLSearchParams(query).get('path') ?? undefined;
-  }
-
-  // Helper to convert array buffer to base64
-  private arrayBufferToBase64(buffer: Uint8Array): string {
-    let binary = '';
-    const len = buffer.byteLength;
-    for (let i = 0; i < len; i++) {
-      binary += String.fromCharCode(buffer[i]);
-    }
-    return btoa(binary);
   }
 
   // Add track to download queue. `force` re-downloads a track that is already
@@ -391,16 +332,26 @@ class DownloadManager {
       // Items queued before filePath was stored still carry it in the URL
       const localPath = item.filePath ?? this.extractLocalPath(item.streamUrl);
 
+      // Local files can only be transcoded by servers that say so (older ones
+      // answered 404 and we found out by failing). Servers with v1 transcoding
+      // (audio.transcode) get the v1 endpoints.
+      const caps = await serverCapabilities.get();
+      const v1Transcode = caps.features.has('audio.transcode');
+      const canTranscodeLocal = v1Transcode || caps.features.has('stream.localTranscode');
       let transcoded =
         downloadFormat !== 'original' &&
         !alreadyTargetFormat &&
-        (isChannelFile || (isLocalFile && !!localPath));
+        (isChannelFile || (isLocalFile && !!localPath && canTranscodeLocal));
 
       let downloadUrl = item.streamUrl;
       if (transcoded) {
         downloadUrl = isChannelFile
-          ? buildTranscodedUrlSync(item.channelId, item.trackId, downloadFormat, downloadBitrate, item.fileName)
-          : buildLocalTranscodedUrlSync(localPath!, downloadFormat, downloadBitrate);
+          ? v1Transcode
+            ? buildV1TranscodedUrlSync(item.channelId, item.trackId, downloadFormat, downloadBitrate)
+            : buildTranscodedUrlSync(item.channelId, item.trackId, downloadFormat, downloadBitrate, item.fileName)
+          : v1Transcode
+            ? buildV1LocalTranscodedUrlSync(localPath!, downloadFormat, downloadBitrate)
+            : buildLocalTranscodedUrlSync(localPath!, downloadFormat, downloadBitrate);
       }
 
       // First request to check file size and if server returns partial content
@@ -462,7 +413,7 @@ class DownloadManager {
 
         // Extract metadata from the downloaded file
         log.debug('Extracting metadata for:', item.fileName);
-        const metadata = await this.extractMetadata(blob);
+        const metadata = await readBlobTags(blob);
 
         await db.cachedTracks.put({
           id: item.trackId,
@@ -480,7 +431,9 @@ class DownloadManager {
           coverArt: metadata.coverArt,
           metadataExtracted: true,
           audioFormat: metadata.audioFormat,
-          audioBitrate: metadata.audioBitrate
+          audioBitrate: metadata.audioBitrate,
+          replayGainDb: metadata.replayGainDb,
+          replayGainPeak: metadata.replayGainPeak
         });
 
         await db.downloadQueue.delete(item.id!);
@@ -529,7 +482,7 @@ class DownloadManager {
 
       // Extract metadata from the downloaded file
       log.debug('Extracting metadata for:', item.fileName);
-      const metadata = await this.extractMetadata(blob);
+      const metadata = await readBlobTags(blob);
 
       await db.cachedTracks.put({
         id: item.trackId,
@@ -545,6 +498,10 @@ class DownloadManager {
         album: metadata.album,
         duration: metadata.duration,
         coverArt: metadata.coverArt,
+        audioFormat: metadata.audioFormat,
+        audioBitrate: metadata.audioBitrate,
+        replayGainDb: metadata.replayGainDb,
+        replayGainPeak: metadata.replayGainPeak,
         metadataExtracted: true
       });
 
@@ -679,7 +636,7 @@ class DownloadManager {
           continue;
         }
 
-        const metadata = await this.extractMetadata(track.blob);
+        const metadata = await readBlobTags(track.blob);
 
         // Update the track with extracted metadata
         await db.cachedTracks.update(track.id, {
@@ -690,7 +647,9 @@ class DownloadManager {
           coverArt: metadata.coverArt || track.coverArt,
           metadataExtracted: true,
           audioFormat: metadata.audioFormat || track.audioFormat,
-          audioBitrate: metadata.audioBitrate || track.audioBitrate
+          audioBitrate: metadata.audioBitrate || track.audioBitrate,
+          replayGainDb: metadata.replayGainDb ?? track.replayGainDb,
+          replayGainPeak: metadata.replayGainPeak ?? track.replayGainPeak
         });
 
         analyzedCount++;

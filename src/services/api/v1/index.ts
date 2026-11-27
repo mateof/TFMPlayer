@@ -8,11 +8,15 @@
  */
 import { apiClient } from '@/services/api/client';
 import { getServerConfig } from '@/db/database';
+import { reportUnauthorized } from '@/stores/connectionStore';
 import { HttpClient, type HttpClientOptions } from './http';
 import { createFilesApi } from './modules/files';
 import { createLocalApi } from './modules/local';
 import { createSharesApi } from './modules/shares';
 import { createTransfersApi } from './modules/transfers';
+import { createSearchApi } from './modules/search';
+import { createPlayerApi } from './modules/player';
+import { createMessagesApi } from './modules/messages';
 
 export * from './http';
 export type * from './types/files';
@@ -20,6 +24,9 @@ export type * from './types/local';
 export type * from './types/shares';
 export type * from './types/transfers';
 export type * from './types/channels';
+export type * from './modules/search';
+export type * from './modules/player';
+export type * from './modules/messages';
 
 /** The v1 modules this app uses, on one HTTP client. */
 export function createApiClient(options: HttpClientOptions = {}) {
@@ -29,7 +36,10 @@ export function createApiClient(options: HttpClientOptions = {}) {
     files: createFilesApi(http),
     local: createLocalApi(http),
     transfers: createTransfersApi(http),
-    shares: createSharesApi(http)
+    shares: createSharesApi(http),
+    search: createSearchApi(http),
+    player: createPlayerApi(http),
+    messages: createMessagesApi(http)
   };
 }
 
@@ -44,7 +54,8 @@ export async function getV1Api(): Promise<ApiClient> {
   if (!config) throw new Error('Server not configured');
   current = createApiClient({
     baseUrl: `${config.useHttps ? 'https' : 'http'}://${config.host}:${config.port}`,
-    apiKey: config.apiKey
+    apiKey: config.apiKey,
+    onUnauthorized: reportUnauthorized
   });
   return current;
 }

@@ -152,7 +152,9 @@ const browse: Record<string, string> = {
   'Name': 'Nombre',
   'Date': 'Fecha',
   'Size': 'Tamaño',
-  'Type': 'Tipo'
+  'Type': 'Tipo',
+  'My channels': 'Mis canales',
+  'You do not own any channel': 'No eres propietario de ningún canal'
 };
 
 export default browse;

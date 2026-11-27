@@ -13,7 +13,7 @@ import { t } from '@/i18n';
 
 type Tab = 'recent' | 'top';
 
-/** Recently played and most played tracks, from the history kept on this device. */
+/** Recently played and most played tracks (shared with the server when it has player.sync, else this device's). */
 export function HistoryPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const tab: Tab = searchParams.get('tab') === 'top' ? 'top' : 'recent';

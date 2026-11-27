@@ -6,7 +6,9 @@ import {
 import { useAudioPlayer } from '@/hooks/useAudioPlayer';
 import { useUiStore } from '@/stores/uiStore';
 import { useCoverArt } from '@/hooks/useCoverArt';
+import { useSeekDrag } from '@/hooks/useSeekDrag';
 import { SleepTimerButton } from './SleepTimerButton';
+import { FavoriteButton } from './FavoriteButton';
 import { formatDuration } from '@/utils/format';
 import { getPreloadedRanges } from '@/utils/preload';
 import { t } from '@/i18n';
@@ -28,8 +30,11 @@ export function DesktopPlayerBar() {
   } = useAudioPlayer();
 
   const coverArt = useCoverArt(currentTrack?.fileId);
+  // Seeks when the mouse is released, not on every step of the drag
+  const seekBar = useSeekDrag(position, seek);
 
   if (!currentTrack) return null;
+  const shownProgress = duration > 0 ? (seekBar.value / duration) * 100 : progress;
 
   const toggleMute = () => {
     if (volume > 0) {
@@ -107,7 +112,7 @@ export function DesktopPlayerBar() {
         </div>
 
         <div className="w-full flex items-center gap-3">
-          <span className="text-xs text-slate-400 tabular-nums w-10 text-right">{formatDuration(position)}</span>
+          <span className="text-xs text-slate-400 tabular-nums w-10 text-right">{formatDuration(seekBar.value)}</span>
           <div className="relative flex-1 h-1 rounded-full bg-slate-700 group">
             {getPreloadedRanges(bufferedRanges, cachedPercent, duration).map((range, i) => (
               <div
@@ -121,15 +126,14 @@ export function DesktopPlayerBar() {
             ))}
             <div
               className="absolute inset-y-0 left-0 bg-emerald-500 rounded-full pointer-events-none"
-              style={{ width: `${progress}%` }}
+              style={{ width: `${shownProgress}%` }}
             />
             <input
               type="range"
               min={0}
               max={duration || 100}
               step="any"
-              value={position}
-              onChange={(e) => seek(parseFloat(e.target.value))}
+              {...seekBar.inputProps}
               aria-label={t('Seek')}
               className="absolute left-0 right-0 -top-2 -bottom-2 h-auto w-full opacity-0 cursor-pointer"
             />
@@ -140,6 +144,7 @@ export function DesktopPlayerBar() {
 
       {/* Volume + panels */}
       <div className="flex items-center justify-end gap-2">
+        <FavoriteButton track={currentTrack} />
         <SleepTimerButton placement="up" />
         <button onClick={toggleMute} className={`${iconButton} text-slate-400 hover:text-white`} title={t('Mute')}>
           {volume === 0 ? <VolumeX className="w-5 h-5" /> : <Volume2 className="w-5 h-5" />}

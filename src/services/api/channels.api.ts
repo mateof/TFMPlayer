@@ -1,4 +1,7 @@
 import { apiClient } from './client';
+import { getV1Api } from './v1';
+import { serverCapabilities } from '@/services/server/capabilities';
+import { apiFileToChannelFile } from '@/services/files/fileManager';
 import type {
   Channel,
   ChannelDetail,
@@ -52,6 +55,27 @@ export const channelsApi = {
     sortBy?: string;
     sortDesc?: boolean;
   }): Promise<{ files: ChannelFile[]; totalCount: number; hasMore: boolean }> {
+    // v1 servers: same listing (its 'audio' filter keeps the folders, like
+    // the mobile 'audio_folders'), and entries carry the v1 media URLs
+    if (await serverCapabilities.has('files.content')) {
+      const v1 = await getV1Api();
+      const { contents, page } = await v1.files.list(String(id), {
+        folderId: folderId || undefined,
+        path: folderId ? undefined : '/',
+        filter: 'audio',
+        search: params?.search || undefined,
+        page: params?.page,
+        pageSize: params?.pageSize,
+        sortBy: params?.sortBy,
+        sortDescending: params?.sortDesc
+      });
+      return {
+        files: (contents?.items ?? []).map((dto) => apiFileToChannelFile(dto, 'channel')),
+        totalCount: page.totalItems,
+        hasMore: page.hasNext
+      };
+    }
+
     const client = await apiClient.getClient();
     const { data } = await client.get<ApiResult<ChannelFile[]> & { pagination?: { totalItems: number; hasNext: boolean } }>(`/api/mobile/channels/${id}/files`, {
       params: {
@@ -68,14 +92,6 @@ export const channelsApi = {
     const totalCount = data.pagination?.totalItems || data.totalCount || data.data.length;
     const hasMore = data.pagination?.hasNext ?? (data.data.length >= (params?.pageSize || 50));
     return { files: data.data, totalCount, hasMore };
-  },
-
-  async browse(id: number, path: string = '/'): Promise<ChannelFile[]> {
-    const client = await apiClient.getClient();
-    const { data } = await client.get<ApiResult<ChannelFile[]>>(`/api/mobile/channels/${id}/browse`, {
-      params: { path }
-    });
-    return data.data;
   },
 
   async addToFavorites(id: number): Promise<void> {

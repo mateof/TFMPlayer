@@ -1,5 +1,6 @@
 import { Link } from 'react-router-dom';
-import { Blend, Languages, HardDrive, Bug, ChevronRight, History } from 'lucide-react';
+import { Blend, Languages, HardDrive, Bug, ChevronRight, History, Bell, Bookmark, Gauge, Heart, Volume1 } from 'lucide-react';
+import { useServerFeatures } from '@/hooks/useServerFeatures';
 import { useSettingsStore } from '@/stores/settingsStore';
 import { AppearanceSettings } from './AppearanceSettings';
 import { getLanguage, LANGUAGES, setLanguage, t, type Language } from '@/i18n';
@@ -16,6 +17,75 @@ function Toggle({ on, onChange, label }: { on: boolean; onChange: (v: boolean) =
     >
       <div className={`w-5 h-5 bg-[#fff] rounded-full shadow transition-transform ${on ? 'translate-x-6' : 'translate-x-0.5'}`} />
     </button>
+  );
+}
+
+function SettingRow({ icon, title, text, children }: { icon: React.ReactNode; title: string; text: string; children: React.ReactNode }) {
+  return (
+    <div className="flex items-center gap-3 p-4 bg-slate-800 rounded-lg">
+      {icon}
+      <div className="flex-1 min-w-0">
+        <p className="text-sm text-white">{title}</p>
+        <p className="text-xs text-slate-400">{text}</p>
+      </div>
+      {children}
+    </div>
+  );
+}
+
+const RATES = [0.75, 1, 1.25, 1.5, 1.75, 2];
+
+/** Speed, resume points, volume levelling and what is shared with the server. */
+function PlaybackSettings() {
+  const playbackRate = useSettingsStore((s) => s.playbackRate);
+  const resumeLongTracks = useSettingsStore((s) => s.resumeLongTracks);
+  const replayGain = useSettingsStore((s) => s.replayGain);
+  const serverNotifications = useSettingsStore((s) => s.serverNotifications);
+  const syncPlayerData = useSettingsStore((s) => s.syncPlayerData);
+  const setPlayback = useSettingsStore((s) => s.setPlayback);
+  const { features } = useServerFeatures();
+  const iconClass = (on: boolean) => `w-5 h-5 shrink-0 ${on ? 'text-emerald-400' : 'text-slate-400'}`;
+
+  return (
+    <section className="p-4" aria-labelledby="playback-heading">
+      <h2 id="playback-heading" className="text-sm font-medium text-slate-400 uppercase mb-4">{t('Playback')}</h2>
+      <div className="space-y-2">
+        <SettingRow icon={<Gauge className={iconClass(playbackRate !== 1)} aria-hidden />} title={t('Playback speed')} text={t('For podcasts and audiobooks. Also in the full player.')}>
+          <select
+            value={String(playbackRate)}
+            onChange={(e) => setPlayback({ playbackRate: Number(e.target.value) })}
+            aria-label={t('Playback speed')}
+            className="px-3 py-1.5 rounded-lg bg-slate-700 text-white text-sm outline-none focus:ring-2 focus:ring-emerald-400"
+          >
+            {RATES.map((r) => <option key={r} value={r}>{`${r}×`}</option>)}
+          </select>
+        </SettingRow>
+        <SettingRow icon={<Bookmark className={iconClass(resumeLongTracks)} aria-hidden />} title={t('Resume long audio')} text={t('Tracks over 20 minutes start where you left them')}>
+          <Toggle on={resumeLongTracks} label={t('Resume long audio')} onChange={(v) => setPlayback({ resumeLongTracks: v })} />
+        </SettingRow>
+        <SettingRow icon={<Volume1 className={iconClass(replayGain)} aria-hidden />} title={t('Volume levelling (ReplayGain)')} text={t('Tracks with ReplayGain tags play at the same loudness')}>
+          <Toggle on={replayGain} label={t('Volume levelling (ReplayGain)')} onChange={(v) => setPlayback({ replayGain: v })} />
+        </SettingRow>
+        <SettingRow
+          icon={<Heart className={iconClass(syncPlayerData && features.has('player.sync'))} aria-hidden />}
+          title={t('Share favourites and history with the server')}
+          text={features.has('player.sync')
+            ? t('Favourite tracks, history and resume points are the same in the web and on every device')
+            : t('Needs a newer TelegramFileManager. Until then they stay on this device.')}
+        >
+          <Toggle on={syncPlayerData} label={t('Share favourites and history with the server')} onChange={(v) => setPlayback({ syncPlayerData: v })} />
+        </SettingRow>
+        <SettingRow
+          icon={<Bell className={iconClass(serverNotifications && features.has('events.hub'))} aria-hidden />}
+          title={t('Server notifications')}
+          text={features.has('events.hub')
+            ? t('Downloads, uploads and errors reported by the server')
+            : t('Needs a newer TelegramFileManager')}
+        >
+          <Toggle on={serverNotifications} label={t('Server notifications')} onChange={(v) => setPlayback({ serverNotifications: v })} />
+        </SettingRow>
+      </div>
+    </section>
   );
 }
 
@@ -60,6 +130,10 @@ export function ExtraSettings() {
           />
         </div>
       </section>
+
+      <div className="h-px bg-slate-700 mx-4" />
+
+      <PlaybackSettings />
 
       <div className="h-px bg-slate-700 mx-4" />
 

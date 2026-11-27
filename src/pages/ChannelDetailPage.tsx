@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { useParams, useSearchParams } from 'react-router-dom';
+import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
-import { Loader2, RefreshCw } from 'lucide-react';
+import { Loader2, MessageSquareText, RefreshCw } from 'lucide-react';
 import { FileBrowser, FILE_PAGE_SIZE, type FileSource, type QueueStartContext } from '@/components/files/FileBrowser';
 import { RefreshChannelDialog } from '@/components/channels/RefreshChannelDialog';
 import { ChannelInfoPanel } from '@/components/channels/ChannelInfoPanel';
@@ -142,7 +142,20 @@ export function ChannelDetailPage() {
         emptyHint={t('Try changing the filter or refreshing the channel')}
         manager={manager}
         headerActions={
-          <button
+          <>
+          {/* Audio of the Telegram history, also what the index doesn't have */}
+          {features.has('messages.browse') && features.has('messages.content') && (
+            <Link
+              to={`/channels/${id}/messages`}
+              className="p-2 text-slate-400 hover:text-white transition-colors"
+              aria-label={t('Chat audio')}
+              title={t('Chat audio: straight from Telegram')}
+            >
+              <MessageSquareText className="w-5 h-5" aria-hidden />
+            </Link>
+          )}
+          {/* Servers advertise the refresh; older ones only through the v1 stats */}
+          {(features.has('channels.refresh') || stats?.canRefresh) && <button
             onClick={() => setShowRefreshDialog(true)}
             disabled={refreshRunning || !channelName}
             className="p-2 text-slate-400 hover:text-white transition-colors disabled:opacity-60"
@@ -150,7 +163,8 @@ export function ChannelDetailPage() {
             title={refreshRunning ? t('Refreshing channel...') : t('Refresh channel from Telegram')}
           >
             <RefreshCw className={`w-5 h-5 ${refreshRunning ? 'animate-spin text-emerald-400' : ''}`} aria-hidden />
-          </button>
+          </button>}
+          </>
         }
         banner={
           refreshRunning ? (

@@ -20,7 +20,14 @@ export type ServerFeature =
   | 'shares.browse'
   | 'search.v1'
   | 'events.hub'
-  | 'transfers.remove';
+  | 'transfers.remove'
+  | 'transfers.pauseUploads'
+  // Telegram message history: browse it and play attachments not indexed
+  | 'messages.browse'
+  | 'messages.content'
+  // Shared player data (favourite tracks, history, resume) and v1 transcoding
+  | 'player.sync'
+  | 'audio.transcode';
 
 export interface ServerCapabilities {
   apiVersion: number;

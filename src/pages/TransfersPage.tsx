@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import {
@@ -11,9 +11,13 @@ import { useUiStore } from '@/stores/uiStore';
 import { getV1Api, isApiError, type TransferDto } from '@/services/api/v1';
 import { groupTransfers, hasFinished, transferActions, type TransferAction, type TransferSection } from '@/services/files/transfers';
 import { operationErrorMessage } from '@/hooks/useFileOperations';
+import { transfersHub } from '@/services/events/hub';
+import type { TransfersSnapshotDto } from '@/services/api/v1';
 import { t } from '@/i18n';
 
 const POLL_MS = 2000;
+// The hub pushes every change: polling only as a safety net while connected
+const HUB_POLL_MS = 30000;
 const QUERY_KEY = ['transfers', 'snapshot'] as const;
 
 const sectionInfo: Record<TransferSection, { label: string; icon: React.ReactNode }> = {
@@ -44,7 +48,8 @@ type Row = { type: 'header'; section: TransferSection; count: number } | { type:
 
 /**
  * What the server is downloading from Telegram, uploading to it, and the
- * folder tasks behind them. Polls every 2 s while the screen is visible.
+ * folder tasks behind them. Live through the transfers hub; without it,
+ * polls every 2 s while the screen is visible.
  */
 export function TransfersPage() {
   const queryClient = useQueryClient();
@@ -52,12 +57,25 @@ export function TransfersPage() {
   const { features } = useServerFeatures();
   const canRemove = features.has('transfers.remove');
   const [busyId, setBusyId] = useState<string | null>(null);
+  const hubConnected = transfersHub.useStatus((s) => s.status === 'connected');
+
+  // Snapshots pushed by the server replace the polled one
+  useEffect(() => {
+    const release = transfersHub.acquire();
+    const off = transfersHub.on('TransfersSnapshot', (snapshot: TransfersSnapshotDto) => {
+      queryClient.setQueryData(QUERY_KEY, snapshot);
+    });
+    return () => {
+      off();
+      release();
+    };
+  }, [queryClient]);
 
   const query = useQuery({
     queryKey: QUERY_KEY,
     queryFn: async ({ signal }) => (await getV1Api()).transfers.snapshot(signal),
     // Polling stops by itself while the app is in the background
-    refetchInterval: (q) => (isApiError(q.state.error) && q.state.error.isNotFound ? false : POLL_MS),
+    refetchInterval: (q) => (isApiError(q.state.error) && q.state.error.isNotFound ? false : hubConnected ? HUB_POLL_MS : POLL_MS),
     refetchIntervalInBackground: false,
     retry: (count, error) => !(isApiError(error) && error.isNotFound) && count < 2
   });

@@ -1,5 +1,6 @@
 import axios, { type AxiosInstance, type AxiosError } from 'axios';
-import { db, getServerConfig } from '@/db/database';
+import { getServerConfig } from '@/db/database';
+import { reportAuthorized, reportUnauthorized } from '@/stores/connectionStore';
 
 class ApiClient {
   private client: AxiosInstance | null = null;
@@ -36,15 +37,16 @@ class ApiClient {
       return config;
     });
 
-    // Response interceptor for error handling
+    // A 401 never wipes the saved server: one endpoint asking for the key
+    // (or a key changed on the server) would log the user out of everything.
+    // The shell shows a banner leading to the server settings instead.
     this.client.interceptors.response.use(
-      (response) => response,
+      (response) => {
+        reportAuthorized();
+        return response;
+      },
       (error: AxiosError) => {
-        if (error.response?.status === 401) {
-          // Clear config on unauthorized
-          db.serverConfig.clear();
-          this.clearCache();
-        }
+        if (error.response?.status === 401) reportUnauthorized();
         return Promise.reject(error);
       }
     );
@@ -71,6 +73,7 @@ class ApiClient {
     this.client = null;
     this.baseUrl = '';
     this.apiKey = '';
+    reportAuthorized();
     this.resetListeners.forEach((listener) => listener());
   }
 
@@ -182,6 +185,19 @@ export function buildLocalTranscodedUrlSync(
   return `${baseUrl}/api/mobile/stream/local/transcoded?${params.toString()}`;
 }
 
+// v1 transcoded downloads (servers with `audio.transcode`). Same contract as
+// the mobile ones (ranges, 501 without FFmpeg); auth via the X-API-Key header.
+export function buildV1TranscodedUrlSync(channelId: string, fileId: string, format: string, bitrate: number): string {
+  const params = new URLSearchParams({ format, bitrate: String(bitrate) });
+  return `${apiClient.getBaseUrl()}/api/v1/channels/${encodeURIComponent(channelId)}/files/${encodeURIComponent(fileId)}/transcoded?${params.toString()}`;
+}
+
+export function buildV1LocalTranscodedUrlSync(filePath: string, format: string, bitrate: number): string {
+  // v1 local paths are relative to the root, without a leading slash
+  const path = filePath.replace(/\\/g, '/').replace(/^\/+/, '');
+  const params = new URLSearchParams({ path, format, bitrate: String(bitrate) });
+  return `${apiClient.getBaseUrl()}/api/v1/local/transcoded?${params.toString()}`;
+}
 // Synchronous version that requires baseUrl to be pre-initialized
 export function buildStreamUrlSync(channelId: string, fileId: string, fileName?: string): string {
   const baseUrl = apiClient.getBaseUrl();

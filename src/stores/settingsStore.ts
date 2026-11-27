@@ -42,6 +42,11 @@ interface SettingsState {
   dynamicColor: boolean; // Accent follows the playing track's cover
   ambientBackground: boolean; // Blurred cover behind the player
   reduceMotion: boolean; // Turn off animations and transitions
+  serverNotifications: boolean; // Show the server's notifications as toasts (events hub)
+  playbackRate: number; // 0.5..3, applied to every track
+  resumeLongTracks: boolean; // Remember where long audio (podcasts, audiobooks) was left
+  replayGain: boolean; // Level the volume of tracks with ReplayGain tags
+  syncPlayerData: boolean; // Favourite tracks, history and resume points on the server (player.sync)
 
   setConfigured: (configured: boolean) => void;
   setServerInfo: (host: string, port: number, useHttps: boolean) => void;
@@ -56,6 +61,7 @@ interface SettingsState {
   setCrossfadeSeconds: (seconds: number) => void;
   setAutoCleanDays: (days: number) => void;
   setDebugLogging: (enabled: boolean) => void;
+  setPlayback: (partial: Partial<Pick<SettingsState, 'serverNotifications' | 'playbackRate' | 'resumeLongTracks' | 'replayGain' | 'syncPlayerData'>>) => void;
   setAppearance: (partial: Partial<Pick<SettingsState, 'accent' | 'background' | 'dynamicColor' | 'ambientBackground' | 'reduceMotion'>>) => void;
   clearSettings: () => void;
 }
@@ -83,6 +89,11 @@ export const useSettingsStore = create<SettingsState>()(
       dynamicColor: false,
       ambientBackground: true,
       reduceMotion: false,
+      serverNotifications: true,
+      playbackRate: 1,
+      resumeLongTracks: true,
+      replayGain: false,
+      syncPlayerData: true,
 
       setConfigured: (configured) => set({ isConfigured: configured }),
       setServerInfo: (host, port, useHttps) =>
@@ -98,6 +109,10 @@ export const useSettingsStore = create<SettingsState>()(
       setCrossfadeSeconds: (seconds) => set({ crossfadeSeconds: Math.max(0, Math.min(12, seconds)) }),
       setAutoCleanDays: (days) => set({ autoCleanDays: Math.max(0, days) }),
       setDebugLogging: (enabled) => set({ debugLogging: enabled }),
+      setPlayback: (partial) =>
+        set(partial.playbackRate !== undefined
+          ? { ...partial, playbackRate: Math.max(0.5, Math.min(3, partial.playbackRate)) }
+          : partial),
       setAppearance: (partial) => set(partial),
       clearSettings: () =>
         set({ isConfigured: false, serverHost: '', serverPort: 5000, useHttps: false })

@@ -1,4 +1,4 @@
-import { loadMusicMetadata } from '@/utils/musicMetadata';
+import { readBlobTags } from '@/utils/audioTags';
 import { db } from '@/db/database';
 import { apiClient, buildLocalStreamUrlSync } from '@/services/api/client';
 import { cacheService } from '@/services/cache/CacheService';
@@ -62,7 +62,7 @@ class PlaybackCacheService {
       const blob = await this.downloadFullFile(track, controller.signal);
       if (controller.signal.aborted) return;
 
-      const metadata = await this.extractMetadata(blob);
+      const metadata = await readBlobTags(blob);
 
       await db.cachedTracks.put({
         id: track.fileId,
@@ -79,6 +79,10 @@ class PlaybackCacheService {
         album: metadata.album ?? track.album,
         duration: metadata.duration ?? track.duration,
         coverArt: metadata.coverArt,
+        audioFormat: metadata.audioFormat,
+        audioBitrate: metadata.audioBitrate,
+        replayGainDb: metadata.replayGainDb,
+        replayGainPeak: metadata.replayGainPeak,
         metadataExtracted: true,
         autoCached: true
       });
@@ -162,48 +166,6 @@ class PlaybackCacheService {
     }
 
     return new Blob(chunks, { type: 'audio/mpeg' });
-  }
-
-  private async extractMetadata(blob: Blob): Promise<{
-    title?: string;
-    artist?: string;
-    album?: string;
-    duration?: number;
-    coverArt?: string;
-  }> {
-    try {
-      const buffer = await blob.arrayBuffer();
-      const metadata = await (await loadMusicMetadata()).parseBuffer(new Uint8Array(buffer), {
-        mimeType: blob.type || 'audio/mpeg',
-        size: blob.size
-      });
-
-      let coverArt: string | undefined;
-      if (metadata.common.picture && metadata.common.picture.length > 0) {
-        const pic = metadata.common.picture[0];
-        coverArt = `data:${pic.format};base64,${this.arrayBufferToBase64(pic.data)}`;
-      }
-
-      return {
-        title: metadata.common.title,
-        artist: metadata.common.artist,
-        album: metadata.common.album,
-        duration: metadata.format.duration,
-        coverArt
-      };
-    } catch (error) {
-      console.warn('Failed to extract metadata:', error);
-      return {};
-    }
-  }
-
-  private arrayBufferToBase64(buffer: Uint8Array): string {
-    let binary = '';
-    const len = buffer.byteLength;
-    for (let i = 0; i < len; i++) {
-      binary += String.fromCharCode(buffer[i]);
-    }
-    return btoa(binary);
   }
 }
 

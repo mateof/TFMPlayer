@@ -1,6 +1,8 @@
 import { apiClient } from './client';
 import { channelsApi } from './channels.api';
+import { getV1Api } from './v1';
 import { serverCapabilities } from '@/services/server/capabilities';
+import { apiFileToChannelFile } from '@/services/files/fileManager';
 import type { ChannelFile } from '@/types/models';
 
 export type SearchScope = 'all' | 'channels' | 'local';
@@ -20,6 +22,8 @@ export interface SearchResults {
    * `favorites`: older server, so only favourite channels were searched one by one.
    */
   mode: 'server' | 'favorites';
+  /** Favourite channels that could not be searched (`favorites` mode). */
+  failedChannels?: string[];
 }
 
 const SEARCH_LIMIT = 200;
@@ -80,57 +84,47 @@ async function serverSearch(q: string, scope: SearchScope, signal?: AbortSignal)
   };
 }
 
-// v1 file DTO, only the fields the fallback needs
-interface V1FileDto {
-  id: string;
-  name: string;
-  path: string;
-  parentId?: string | null;
-  isFile: boolean;
-  hasChildren: boolean;
-  size: number;
-  type: string;
-  category: string;
-  dateCreated: string;
-  dateModified: string;
-  messageId?: number | null;
+/** Servers with `search.v1`: the same global search with v1 DTOs (media URLs included). */
+async function v1Search(q: string, scope: SearchScope, signal?: AbortSignal): Promise<SearchResults> {
+  const v1 = await getV1Api();
+  const data = await v1.search.global({ q, scope, filter: 'audio', limit: SEARCH_LIMIT }, signal);
+  return {
+    channels: (data?.channels ?? []).map((group) => ({
+      channelId: group.channelId,
+      channelName: group.channelName,
+      files: group.files.filter((f) => f.isFile).map((f) => apiFileToChannelFile(f, 'channel'))
+    })),
+    local: (data?.local ?? []).filter((f) => f.isFile).map((f) => apiFileToChannelFile(f, 'local')),
+    truncated: !!data?.truncated,
+    mode: 'server'
+  };
 }
 
 /** Older servers: recursive v1 search, favourite channels only. */
 async function favoritesSearch(q: string, signal?: AbortSignal): Promise<SearchResults> {
   const favorites = (await channelsApi.getFavorites()).slice(0, FALLBACK_MAX_CHANNELS);
-  const client = await apiClient.getClient();
+  const v1 = await getV1Api();
   const groups: ChannelSearchGroup[] = [];
+  const failed: string[] = [];
   let truncated = false;
 
   const searchOne = async (channel: { id: number; name: string }) => {
     try {
-      const { data } = await client.get<{ data: V1FileDto[]; page?: { totalItems?: number } }>(
-        `/api/v1/channels/${channel.id}/files/search`,
-        { params: { q, filter: 'audio', filesOnly: true, pageSize: FALLBACK_PER_CHANNEL }, signal }
+      const { items, page } = await v1.files.search(
+        String(channel.id),
+        { q, filter: 'audio', filesOnly: true, pageSize: FALLBACK_PER_CHANNEL },
+        signal
       );
-      const files = (data.data ?? [])
+      const files = items
         .filter((f) => f.isFile && f.category === 'Audio')
-        .map<ChannelFile>((f) => ({
-          id: f.id,
-          name: f.name,
-          path: f.path,
-          parentId: f.parentId ?? '',
-          size: f.size,
-          type: f.type,
-          category: 'Audio',
-          dateCreated: f.dateCreated,
-          dateModified: f.dateModified,
-          messageId: f.messageId ?? undefined,
-          isFile: true,
-          hasChildren: false
-        }));
-      if ((data.page?.totalItems ?? 0) > files.length) truncated = true;
+        .map((f) => apiFileToChannelFile(f, 'channel'));
+      if (page.totalItems > files.length) truncated = true;
       if (files.length > 0) {
         groups.push({ channelId: String(channel.id), channelName: channel.name, files });
       }
     } catch (error) {
       if (signal?.aborted) throw error;
+      failed.push(channel.name);
       console.warn(`Search failed in channel ${channel.name}:`, error);
     }
   };
@@ -145,18 +139,26 @@ async function favoritesSearch(q: string, signal?: AbortSignal): Promise<SearchR
     })
   );
 
-  groups.sort((a, b) => a.channelName.localeCompare(b.channelName));
-  return { channels: groups, local: [], truncated, mode: 'favorites' };
-}
+  // Every channel failing is an error, not "no results"
+  if (favorites.length > 0 && failed.length === favorites.length) {
+    throw new Error('Search failed in every favourite channel');
+  }
 
+  groups.sort((a, b) => a.channelName.localeCompare(b.channelName));
+  return { channels: groups, local: [], truncated, mode: 'favorites', failedChannels: failed };
+}
 export const searchApi = {
   /**
-   * Audio search across channels and local files. Uses the server-wide
-   * search when the server advertises `search.global`, otherwise searches
-   * the favourite channels one by one.
+   * Audio search across channels and local files. Uses the server-wide v1
+   * search (`search.v1`), else the mobile one (`search.global`), otherwise
+   * searches the favourite channels one by one.
    */
   async search(q: string, scope: SearchScope = 'all', signal?: AbortSignal): Promise<SearchResults> {
-    if (await serverCapabilities.has('search.global')) {
+    const caps = await serverCapabilities.get();
+    if (caps.features.has('search.v1')) {
+      return v1Search(q, scope, signal);
+    }
+    if (caps.features.has('search.global')) {
       return serverSearch(q, scope, signal);
     }
     if (scope === 'local') {

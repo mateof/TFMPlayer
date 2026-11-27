@@ -1,10 +1,17 @@
 import { usePlayerStore } from '@/stores/playerStore';
 import { db } from '@/db/database';
-import { buildStreamUrlWithAuth, buildLocalStreamUrlWithAuth } from '@/services/api/client';
+import { apiClient, buildStreamUrlWithAuth, buildLocalStreamUrlWithAuth } from '@/services/api/client';
+import { appendApiKey } from '@/services/api/v1/http';
+import { isMessageTrack } from '@/utils/messageTracks';
 import { cacheService } from '@/services/cache/CacheService';
 import { playbackCache } from '@/services/cache/PlaybackCacheService';
 import { loadNextQueuePage } from '@/services/queue/QueueSourceService';
 import { playHistory } from '@/services/history/PlayHistoryService';
+import { preloadOnServer } from '@/services/server/serverPreload';
+import { resumeService } from '@/services/player/ResumeService';
+import { audioMetadataService } from '@/services/audio/AudioMetadataService';
+import { replayGainFactor, type ReplayGainInfo } from './replayGain';
+import { formatDuration } from '@/utils/format';
 import { useSettingsStore, type SoundEnhancementSettings } from '@/stores/settingsStore';
 import { useUiStore } from '@/stores/uiStore';
 import { EQ_BANDS } from '@/utils/eqPresets';
@@ -100,6 +107,9 @@ class AudioPlayerService {
   // Volume the user chose; per-element fade levels multiply it
   private masterVolume = 1;
   private levels = new Map<HTMLAudioElement, number>();
+  // Track each element holds, for its ReplayGain (and the gains read so far)
+  private elementTracks = new Map<HTMLAudioElement, string>();
+  private replayGains = new Map<string, ReplayGainInfo>();
 
   // Restored session: where to resume when play is first pressed
   private resumeAt: number | null = null;
@@ -136,6 +146,22 @@ class AudioPlayerService {
 
     this.masterVolume = usePlayerStore.getState().volume ?? 1;
 
+    // Speed and volume levelling follow the settings live
+    useSettingsStore.subscribe((s, prev) => {
+      if (s.playbackRate !== prev.playbackRate) {
+        this.elements.forEach((el) => {
+          el.defaultPlaybackRate = s.playbackRate || 1;
+          el.playbackRate = s.playbackRate || 1;
+        });
+        this.updatePositionState();
+      }
+      if (s.replayGain !== prev.replayGain) {
+        this.elements.forEach((el) => this.applyLevel(el));
+        const current = usePlayerStore.getState().currentTrack;
+        if (s.replayGain && current) void this.loadReplayGain(current);
+      }
+    });
+
     playbackCache.onCached((trackId, blob) => {
       const store = usePlayerStore.getState();
       if (store.currentTrack?.fileId === trackId) {
@@ -171,8 +197,8 @@ class AudioPlayerService {
   // ---------------------------------------------------------------------------
 
   private applyLevel(el: HTMLAudioElement): void {
-    const level = this.levels.get(el) ?? 1;
     const node = this.nodes.get(el);
+    const level = (this.levels.get(el) ?? 1) * this.trackGainFactor(el, !!node);
     if (node) {
       // Routed through Web Audio: the gain node is the single source of truth
       el.volume = 1;
@@ -185,6 +211,46 @@ class AudioPlayerService {
   private setLevel(el: HTMLAudioElement, level: number): void {
     this.levels.set(el, Math.max(0, Math.min(1, level)));
     this.applyLevel(el);
+  }
+
+  // ReplayGain of the track an element holds (1 when off or untagged)
+  private trackGainFactor(el: HTMLAudioElement, canBoost: boolean): number {
+    if (!useSettingsStore.getState().replayGain) return 1;
+    const trackId = this.elementTracks.get(el);
+    return replayGainFactor(trackId ? this.replayGains.get(trackId) : undefined, canBoost);
+  }
+
+  /** An element now holds this track: speed, and its ReplayGain once known. */
+  private bindTrack(el: HTMLAudioElement, track: Track): void {
+    this.elementTracks.set(el, track.fileId);
+    const rate = useSettingsStore.getState().playbackRate || 1;
+    el.defaultPlaybackRate = rate;
+    el.playbackRate = rate;
+    this.applyLevel(el);
+    void this.loadReplayGain(track);
+  }
+
+  private async loadReplayGain(track: Track): Promise<void> {
+    if (!useSettingsStore.getState().replayGain || this.replayGains.has(track.fileId)) return;
+    try {
+      const cached = await db.cachedTracks.get(track.fileId);
+      let info: ReplayGainInfo | null = cached?.replayGainDb !== undefined
+        ? { db: cached.replayGainDb, peak: cached.replayGainPeak }
+        : null;
+      if (!info) {
+        // Streamed (or downloaded before the tag was read): the head of the file
+        const meta = await audioMetadataService.getMetadata(track.fileId, track.streamUrl, track.fileSize);
+        if (meta?.replayGainDb !== undefined) info = { db: meta.replayGainDb, peak: meta.replayGainPeak };
+      }
+      if (!info) return;
+      if (this.replayGains.size > 500) this.replayGains.clear();
+      this.replayGains.set(track.fileId, info);
+      this.elements.forEach((el) => {
+        if (this.elementTracks.get(el) === track.fileId) this.applyLevel(el);
+      });
+    } catch (error) {
+      log.debug('No ReplayGain for', track.fileName, error);
+    }
   }
 
   setVolume(volume: number): void {
@@ -510,6 +576,7 @@ class AudioPlayerService {
         this.updatePositionState();
       }
       this.persistPosition(true);
+      resumeService.report(store().currentTrack, el.currentTime, el.duration, true);
     });
 
     el.addEventListener('ended', () => {
@@ -529,6 +596,7 @@ class AudioPlayerService {
       this.updateBufferedRanges();
       this.maybePrepareNext();
       playHistory.tick(store().currentTrack, el.currentTime, el.duration, !el.paused);
+      resumeService.report(store().currentTrack, el.currentTime, el.duration);
       this.persistPosition(false);
       const now = Date.now();
       if (now - this.lastPositionUpdate >= this.positionUpdateInterval) {
@@ -721,9 +789,12 @@ class AudioPlayerService {
     } catch (e) {
       log.warn('Error checking cache:', e);
     }
-    const url = track.isLocalFile
-      ? await buildLocalStreamUrlWithAuth(track.filePath)
-      : await buildStreamUrlWithAuth(track.channelId, track.fileId, track.fileName);
+    // Attachments of messages not in the index play through the v1 endpoint
+    const url = isMessageTrack(track)
+      ? appendApiKey(track.streamUrl, await apiClient.getApiKey())
+      : track.isLocalFile
+        ? await buildLocalStreamUrlWithAuth(track.filePath)
+        : await buildStreamUrlWithAuth(track.channelId, track.fileId, track.fileName);
     return { blob: null, url };
   }
 
@@ -843,6 +914,7 @@ class AudioPlayerService {
         const el = this.standby;
         this.releaseElement(el);
         this.assignSource(el, source);
+        this.bindTrack(el, track);
         el.load();
         this.prepared = { trackId: track.fileId, blob: source.blob };
         log.debug('Prepared next track', track.fileName);
@@ -930,6 +1002,15 @@ class AudioPlayerService {
     this.currentCoverArt = null;
     this.resumeAt = null;
 
+    // Long audio (podcasts, audiobooks) starts where it was left
+    if (options.startAt === undefined) {
+      const resume = resumeService.positionFor(track);
+      if (resume !== null) {
+        options = { ...options, startAt: resume };
+        useUiStore.getState().addToast(t('Resuming at {time}', { time: formatDuration(resume) }), 'info');
+      }
+    }
+
     try {
       const old = this.audio;
       const oldIsSounding = !!old.src && !old.paused && !old.ended;
@@ -958,6 +1039,7 @@ class AudioPlayerService {
       this.transitioning = true;
       this.clearSwapLoadedListener();
       this.audio = target;
+      this.bindTrack(target, track);
       this.cachedBlobForCurrentTrack = blob;
       this.lastBufferedKey = '';
       this.lastTimeupdatePos = 0;
@@ -1020,6 +1102,12 @@ class AudioPlayerService {
 
       if (!blob) {
         playbackCache.cacheTrackInBackground(track).catch(() => {});
+      }
+
+      // The server fetches the next track from Telegram while this one plays
+      const upcoming = this.peekNextIndex();
+      if (upcoming >= 0 && upcoming !== usePlayerStore.getState().currentIndex) {
+        void preloadOnServer(usePlayerStore.getState().queue[upcoming]);
       }
 
       const { queue: currentQueue, currentIndex, queueSource } = usePlayerStore.getState();
