@@ -9,6 +9,7 @@ import { ToastContainer } from '../common/Toast';
 import { ConfirmHost } from '../common/ConfirmDialog';
 import { LoadingScreen } from '../common/Spinner';
 import { PlayerOverlay } from '../player/PlayerOverlay';
+import { AuthBanner } from './AuthBanner';
 import { useUiStore } from '@/stores/uiStore';
 import { useMediaQuery, DESKTOP_QUERY, WIDE_QUERY } from '@/hooks/useMediaQuery';
 import { useKeyboardShortcuts } from '@/hooks/useKeyboardShortcuts';
@@ -31,6 +32,7 @@ export function AppShell() {
       // top of it), so the safe-area inset can never push the tab bar over
       // the mini player and the end of every list stays reachable
       <div className="h-dvh flex flex-col bg-slate-900 overflow-hidden">
+        <AuthBanner />
         <main className="flex-1 min-h-0 overflow-y-auto">
           <Suspense fallback={<LoadingScreen />}>
             <Outlet />
@@ -47,6 +49,7 @@ export function AppShell() {
 
   return (
     <div className="h-dvh flex flex-col bg-slate-900 overflow-hidden">
+      <AuthBanner />
       <div className="flex-1 min-h-0 flex">
         <div className="w-60 shrink-0">
           <Sidebar />

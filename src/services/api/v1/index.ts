@@ -8,6 +8,7 @@
  */
 import { apiClient } from '@/services/api/client';
 import { getServerConfig } from '@/db/database';
+import { reportUnauthorized } from '@/stores/connectionStore';
 import { HttpClient, type HttpClientOptions } from './http';
 import { createFilesApi } from './modules/files';
 import { createLocalApi } from './modules/local';
@@ -44,7 +45,8 @@ export async function getV1Api(): Promise<ApiClient> {
   if (!config) throw new Error('Server not configured');
   current = createApiClient({
     baseUrl: `${config.useHttps ? 'https' : 'http'}://${config.host}:${config.port}`,
-    apiKey: config.apiKey
+    apiKey: config.apiKey,
+    onUnauthorized: reportUnauthorized
   });
   return current;
 }

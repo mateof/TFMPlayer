@@ -1,5 +1,6 @@
 import axios, { type AxiosInstance, type AxiosError } from 'axios';
-import { db, getServerConfig } from '@/db/database';
+import { getServerConfig } from '@/db/database';
+import { reportAuthorized, reportUnauthorized } from '@/stores/connectionStore';
 
 class ApiClient {
   private client: AxiosInstance | null = null;
@@ -36,15 +37,16 @@ class ApiClient {
       return config;
     });
 
-    // Response interceptor for error handling
+    // A 401 never wipes the saved server: one endpoint asking for the key
+    // (or a key changed on the server) would log the user out of everything.
+    // The shell shows a banner leading to the server settings instead.
     this.client.interceptors.response.use(
-      (response) => response,
+      (response) => {
+        reportAuthorized();
+        return response;
+      },
       (error: AxiosError) => {
-        if (error.response?.status === 401) {
-          // Clear config on unauthorized
-          db.serverConfig.clear();
-          this.clearCache();
-        }
+        if (error.response?.status === 401) reportUnauthorized();
         return Promise.reject(error);
       }
     );
@@ -71,6 +73,7 @@ class ApiClient {
     this.client = null;
     this.baseUrl = '';
     this.apiKey = '';
+    reportAuthorized();
     this.resetListeners.forEach((listener) => listener());
   }
 
