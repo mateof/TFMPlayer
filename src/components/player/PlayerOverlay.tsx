@@ -677,7 +677,6 @@ export function PlayerOverlay() {
               </p>
             </div>
             <div className="flex items-center gap-1">
-              <FavoriteButton track={currentTrack} />
               <PlaybackRateButton />
               <SleepTimerButton />
               <button
@@ -852,13 +851,18 @@ export function PlayerOverlay() {
           </div>
 
           {/* Track Info */}
-          <div className="px-8 text-center">
-            <h1 className="text-xl font-bold text-white truncate">
-              {currentTrack.title || currentTrack.fileName}
-            </h1>
-            <p className="text-slate-400 mt-1">
-              {currentTrack.artist || t('Unknown artist')}
-            </p>
+          <div className="px-8 flex items-center gap-2">
+            {/* Same width as the heart, so the title stays centred */}
+            <span className="w-9 shrink-0" aria-hidden />
+            <div className="flex-1 min-w-0 text-center">
+              <h1 className="text-xl font-bold text-white truncate">
+                {currentTrack.title || currentTrack.fileName}
+              </h1>
+              <p className="text-slate-400 mt-1">
+                {currentTrack.artist || t('Unknown artist')}
+              </p>
+            </div>
+            <FavoriteButton track={currentTrack} className="shrink-0" />
           </div>
 
           {/* Progress Bar */}
