@@ -11,25 +11,27 @@ import { useChannelsQuery, useFavoriteChannelsQuery, useChannelFoldersQuery, use
 import type { Channel, ChannelFolder } from '@/types/models';
 import { t } from '@/i18n';
 
-type Tab = 'all' | 'favorites' | 'folders' | 'local';
+type Tab = 'favorites' | 'mine' | 'all' | 'folders' | 'local';
 
-const validTabs: Tab[] = ['all', 'favorites', 'folders', 'local'];
+const validTabs: Tab[] = ['favorites', 'mine', 'all', 'folders', 'local'];
+// Favourites open first: they are what gets played most
+const DEFAULT_TAB: Tab = 'favorites';
 
 export function ChannelsPage() {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const { addToast } = useUiStore();
 
-  // Get tab from URL or default to 'all'
+  // Get tab from URL or default to favourites
   const urlTab = searchParams.get('tab') as Tab | null;
-  const initialTab = urlTab && validTabs.includes(urlTab) ? urlTab : 'all';
+  const initialTab = urlTab && validTabs.includes(urlTab) ? urlTab : DEFAULT_TAB;
 
   const [activeTab, setActiveTabState] = useState<Tab>(initialTab);
 
   const setActiveTab = useCallback((tab: Tab) => {
     setActiveTabState(tab);
     const params = new URLSearchParams(searchParams);
-    if (tab === 'all') {
+    if (tab === DEFAULT_TAB) {
       params.delete('tab');
     } else {
       params.set('tab', tab);
@@ -99,9 +101,13 @@ export function ChannelsPage() {
     ch.name.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
+  // Channels this account owns (the ones it usually uploads its music to)
+  const filteredMine = filteredChannels.filter((ch) => ch.isOwner);
+
   const tabs: { key: Tab; label: string }[] = [
-    { key: 'all', label: t('All') },
     { key: 'favorites', label: t('Favorites') },
+    { key: 'mine', label: t('My channels') },
+    { key: 'all', label: t('All') },
     { key: 'folders', label: t('Folders') },
     { key: 'local', label: t('Local') }
   ];
@@ -158,12 +164,14 @@ export function ChannelsPage() {
         )}
 
         {/* Tabs - always visible */}
-        <div className="flex border-b border-slate-700">
+        <div className="flex border-b border-slate-700 overflow-x-auto no-scrollbar" role="tablist">
           {tabs.map((tab) => (
             <button
               key={tab.key}
+              role="tab"
+              aria-selected={activeTab === tab.key}
               onClick={() => setActiveTab(tab.key)}
-              className={`flex-1 lg:flex-none lg:px-6 py-3 text-sm font-medium transition-colors ${
+              className={`flex-1 shrink-0 px-3 whitespace-nowrap lg:flex-none lg:px-6 py-3 text-sm font-medium transition-colors ${
                 activeTab === tab.key
                   ? 'text-emerald-400 border-b-2 border-emerald-400'
                   : 'text-slate-400'
@@ -184,6 +192,13 @@ export function ChannelsPage() {
             channels={filteredChannels}
             onToggleFavorite={toggleFavorite}
             onSelect={(ch) => navigate(`/channels/${ch.id}`)}
+          />
+        ) : activeTab === 'mine' ? (
+          <ChannelList
+            channels={filteredMine}
+            onToggleFavorite={toggleFavorite}
+            onSelect={(ch) => navigate(`/channels/${ch.id}`)}
+            emptyMessage={t('You do not own any channel')}
           />
         ) : activeTab === 'favorites' ? (
           <ChannelList

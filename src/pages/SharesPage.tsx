@@ -33,7 +33,13 @@ export function SharesPage() {
 
   return (
     <div className="flex flex-col h-full">
-      <Header title={t('Shared collections')} subtitle={supported ? t('{count} collections', { count: total }) : undefined} />
+      {/* Reached from the channels screen (no tab of its own on mobile): needs a way back */}
+      <Header
+        title={t('Shared collections')}
+        subtitle={supported ? t('{count} collections', { count: total }) : undefined}
+        showBack
+        backPath="/channels"
+      />
 
       {!loaded ? (
         <LoadingScreen message={t('Loading...')} />
